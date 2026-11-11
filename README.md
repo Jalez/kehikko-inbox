@@ -1,117 +1,61 @@
-# kehikko-notifications
+# kehikko-inbox
 
-Every line the modules on this machine have said happened, newest first,
-attributed to whoever said it.
+**Inbox**, a module a Kehikot host frames: what the modules on this computer need from you, are
+doing and have said, in one list — and where you answer, dismiss or go to each thing.
 
 ```
-./run.sh                # serves on 127.0.0.1:7910
-bun run register        # tells a host on this machine where to find it
-bun test && bun run typecheck
+./run.sh                # serves on 127.0.0.1:7910 (or the next free port)
+bun test && bun run typecheck && bun run check:rows
 ```
+
+It used to be Notifications (`kehikot.notifications`). That id is on the host's retired list, so
+this is a new module, `kehikot.inbox`, from 2.0.0.
 
 ## What it is
 
-A module that **consumes** `kehikot.notifications@1`. Another module calls
-`events.emit`; the host checks the format, validates the payload, stamps the
-sender out of its own registry, and posts a `kehikot.event` into this frame.
-This page writes it down and draws it.
+The host keeps ONE record of what modules report with `activity.set`: what needs the person, what
+is working, what finished. Until protocol 2.79.0 only the host drew it, in its bar. This module
+draws it on a kehikko instead, under the capability `inbox:person`:
 
-It emits nothing. It asks the host for nothing — `declares.uses` is empty. The
-only capability it would need to write to its own panel is `events:emit`, and a
-notification panel that could write to itself is a panel whose contents are not
-evidence of anything.
+- `inbox.read` — the record of the project the frame stands in, the other projects' live items,
+  what Next goes to, how much is in Earlier, and the muted modules.
+- `inbox.log` — Earlier, a page at a time.
+- `inbox.act` (seen, dismiss, forget, seen-all), `inbox.answer`, `inbox.open`, `inbox.use` — the
+  person's acts. A host takes every one but `seen` only on the person's fresh press in the frame,
+  so the page calls them straight from click handlers, never from an effect or a timer. A
+  `declined` outcome carries the host's sentence, which the page shows.
+- `kehikot.inbox` from the host: `changed` (read again) and `next` (the person pressed
+  Alt+Shift+N in the host: open that item at once — allowed without a press for a few seconds —
+  and highlight its row; `next: null` says "Nothing needs you").
 
-## The three decisions worth knowing before reading the code
+It keeps nothing of its own and has no tools for agents: the record is the host's, and only the
+person acts on it. Agents read it with the host's `read_inbox`.
 
-**Events are not history.** Delivery is best-effort by design: there is no
-acknowledgement, and an event sent to a module that is still loading is lost.
-So this module keeps its own store (`store.ts`), capped at 2000 rows with the
-oldest falling off, and what it shows survives a reload. What it cannot show is
-what arrived before its page existed, and the page says so rather than implying
-the machine was quiet.
+On a host older than 2.79.0 none of these is answered: the page says one sentence — the Inbox is
+in Kehikot's bar until Kehikot is updated — and draws nothing else.
 
-**The store lives in the project.** One file per project, at
-`<project>/.kehikot/notifications/notifications.json`, named by the
-`kehikot-module-protocol` helpers like every other module's. The page learns the
-project from `kehikot.context.projectPath` and sends it with every read and
-write. With no project open there is nowhere to keep anything: the page says so,
-writes are refused with a sentence, and nothing falls back to a folder beside
-this program. Whether `.kehikot/` is committed is the host's per-project
-setting, not this module's.
+## The page
 
-The old single store, `data/notifications.json` beside this program, is moved
-whole into the first project that opens without a store of its own (its rows
-keep the canvas they happened on, so the filter still separates them), and
-`data/` is removed once empty. It is not split between projects: a row names
-its canvas by the host's runtime id and a display name, neither of which a
-project's own record of its canvases can be matched against without guessing.
-An existing project store is never overwritten. `NOTIFICATIONS_DATA` now only
-moves where that old file is looked for, which is what the tests use it for.
+- **Needs you** (urgent first, then the longest waiting), **Working**, **Finished** (unseen,
+  newest first), **This project** (in "This kehikko", what is about the whole project),
+  **In <project>** for each other project, and **Earlier** (collapsed; what finished and was
+  seen, then the log, paged, each row forgettable, and "Forget what is shown").
+- Each row says WHO before what (`<by> · <state>`), then the label, the place and the age. Urgent
+  is said in words. A dot always stands beside its state in words: never colour alone. Attention
+  is amber, the same as the host bar's count.
+- Every string is text: never rendered as markup or a link, and no URL in one is ever opened.
+- **Header** (`kehikot.header`): Show — Everything / Needs you only; Where — Everywhere / This
+  kehikko. The module's own state, kept per container by the client's kept view (`state:keep`).
+- **Footer** (`kehikot.footer`): the count ("2 need you · 1 working") and **Next** beside it. A host
+  that draws no footer gets the same row drawn by the page.
+- **A small container** (under 96 px high): the count and the most pressing item on one pressable line.
 
-**The filter is a comparison, not a subscription.** Each event carries the
-kehikko it happened on; `context.kehikko` says the one this container is standing on.
-`src/sift.ts` compares them. Two states — all, or this kehikko — and when the
-host has told this container no kehikko, the filter cannot be honest: it shows
-everything and says why, because an empty list would be a claim, and a false one.
+## Files
 
-**The filter is offered, not drawn.** The two presses used to be a strip at the
-top of this page, in a container that is routinely 220 pixels wide. They are now
-one button in the container header: this module sends `kehikot.filters` with its
-options and their words, the host draws a menu out of them and never learns what
-`here` means, and a press comes back in `context.filters`. What did not move is
-the reporting — the sentence when the filter cannot be honoured, and the count
-of lines that are neither here nor elsewhere, are things this module knows and
-the host cannot see.
-
-The choice is remembered by the host, against the CONTAINER. That is a fix as
-well as a move: it used to be a `localStorage` key, which is per browser, so two
-containers of this module on two kehikot shared one value and overwrote each
-other. The old key is deleted on load and deliberately not migrated — migrating
-one browser-wide answer into every container on every canvas is the bug, written
-down permanently.
-
-**And so is the way to discard them.** `Forget` and the `N held` count beside it
-were the last two things in this page's own strip, and the strip is gone with
-them — thirty-one pixels of chrome given back, in a container that is routinely
-220 wide and under 300 tall. This module sends `kehikot.clearable` with a label
-in its own words (`forget 12 shown`), the host draws one button beside the
-filter, and the second press comes back as `kehikot.clear`. The host learns
-nothing: that message carries no ids, no count and no answer, because the host
-sees rows it does not render in a document it cannot read.
-
-What goes is **what is on screen**, which is what makes the two header controls
-compose — narrow to this kehikko, press clear, and this kehikko's lines go. That
-is a real change from the old button, which always meant everything whatever the
-filter said; a position that was never argued for so much as inherited from a bar
-that could not see the filter. On `all` the two behave identically. On `this
-kehikko` the new one is narrower, and somebody who wants the lot presses *Show
-everything* in the filter first. The reverse — a button that quietly deletes more
-than it says it will — has no such recovery.
-
-`held` and `keep` survive, on the empty-state line, and that is not sentiment:
-`held` counts the STORE while the new label counts the SCREEN, so "nothing has
-happened" and "nothing has happened *here*, and eleven things happened
-elsewhere" go on reading differently.
-
-**`from` is the host's word; the contents are the sender's.** The host took the
-sender's id from its own registry, so no module can post under another's name.
-Nobody checked whether the sentence is true. Every row is therefore drawn as
-"*kehikot.checklist* **says** …", with the by-line above the message rather than
-below it: a reader should know whose claim it is before they read the claim.
-
-## Why `declares.storage: true` and no `server.cors`
-
-This module owns data and takes writes, gated on a ticket printed into `/app`.
-Framed opaque, its own `/api` calls would be cross-origin, the server would have
-to answer permissive CORS, and any page in any tab could then read `/app` — and
-the ticket in it — off loopback. That was measured in `kehikko-journeys`:
-
-```
-$ curl -H 'Origin: https://evil.example' http://127.0.0.1:7840/app
-Access-Control-Allow-Origin: *
-...ticket" type="application/json">"e75d4d01-…
-```
-
-Declaring storage gets a real origin back, which makes those calls same-origin
-and involves no CORS at all. The essays in `manifest.ts` and `vite.config.ts`
-say it at length.
+- `manifest.ts` — id, port, capabilities, help.
+- `src/inbox.ts` — the rules, pure: sections, order, folding, words, counts, the small line.
+- `src/header.ts`, `src/footer.ts` — what the module declares to the host.
+- `src/wire/inbox-api.ts` — the six methods over the frame's `request`, and the old-host check.
+- `src/app.tsx` — the page; `src/components/parts.tsx` — rows, dots, the question card.
+- `doors.ts` — the health check (no store, no MCP door).
+- `kehikot.rows.json` — the header and footer per state, for `kehikot-check-rows` in CI.

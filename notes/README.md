@@ -1,6 +1,6 @@
 # Release notes
 
-One file per release, `<version>.md`, holding only that release's "What's new"
+One file per release, `<version>.md`: a first line `Kind: breaking | feature | fix`, then that release's "What's new"
 bullets. The release workflow refuses to publish a version without one, and puts
 it on the release page, which is what Kehikot shows when it offers the update.
 

@@ -1,298 +1,32 @@
-import { establishBuild, mintTicket, refuseTicket, type Reply } from 'kehikot-module-protocol/serve'
+import { establishBuild, mintTicket, type Reply } from 'kehikot-module-protocol/serve'
 
 import { ID, MANIFEST, VERSION } from './manifest.ts'
-import { KEEP, forget, record, standing, type Kehikko } from './store.ts'
 
 /**
- * Every door this app answers on that is not the page itself.
- *
- * A file of functions rather than a server, for the reason every module here
- * has one: a module is ONE ORIGIN or it is nothing. The protocol refuses a
- * manifest whose `entry` points anywhere but the origin that served the
- * manifest — a program that could name somebody else's page would be a program
- * that could have the host frame somebody else. The page is Vite's, because a
- * `dist/` served off disk has cost this codebase whole afternoons of a stale
- * page answering 200 with every symptom of a working app and none of the
- * changes. So the manifest, the health check and this app's own store have to
- * be Vite's too, however much tidier a second process on a second port would
- * look.
- *
- * `answer()` therefore takes a method, a path, a query, a body and a ticket and
- * returns a status and a document. The protocol's `doors()` plugin adapts a node
- * request to it (see `vite.config.ts`), and everything decided here can be
- * called without a socket — which is what makes `test/doors.test.ts` a test of
- * the decisions rather than of HTTP.
- *
- * ## Nothing here trusts its caller
- *
- * The page is one caller. Whatever else on this machine found the port is
- * another: this listens on loopback, and loopback is a fence around the machine
- * rather than around the programs on it. A string has a length before it has a
- * meaning, and everything below is bounded before it is looked at.
+ * Every door but the page, as one pure function: `answer` takes a request and returns a status and
+ * a body, or `null` for "not ours, let Vite have it". The Inbox keeps nothing and has no tools for
+ * agents — the record is the host's, and only the person acts on it — so the one door is the
+ * health check.
  */
 
-/* ------------------------------------------------------------------ *
- * Bounds
- * ------------------------------------------------------------------ */
-
-/**
- * The bounds, which are the format's own.
- *
- * `kehikot.notifications@1` bounds `message` at 2000 characters and `refs` at
- * 32 of 64, and the host validated against exactly that before it delivered
- * anything. These are the same numbers written out rather than imported,
- * because the caller of `/api/record` is the page and the page is relaying what
- * a host sent — but this door has no way to know it is, and a door that
- * accepted whatever it was told on the grounds that its usual caller is honest
- * is a door with no bound at all.
- *
- * Slightly generous rather than exact: this app is not the authority on the
- * format and a bound tighter than the host's would mean silently refusing rows
- * the host considers valid, which would show up as notifications that vanish.
- * The point of the bound is to stop something unbounded, not to re-adjudicate.
- */
-const MAX_ID = 128
-const MAX_MESSAGE = 4000
-const MAX_EPIC = 200
-const MAX_REF = 200
-const MAX_REFS = 64
-const MAX_AT = 40
-const MAX_NAME = 200
-const MAX_KEY = 64
-/** `LIMITS.PLACE_PARTS` in the protocol: at most this many parts in one place. */
-const MAX_PLACE_PARTS = 16
-/** As long as a path may be, matching the protocol's own `LIMITS.PATH`. */
-const MAX_PROJECT = 4096
-
-function str(value: unknown, max: number): string {
-  if (typeof value !== 'string') return ''
-  return value.slice(0, max)
-}
-
-function refs(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .slice(0, MAX_REFS)
-    .map((v) => str(v, MAX_REF))
-    .filter(Boolean)
-}
-
-/**
- * The write ticket.
- *
- * Minted once per process and printed into the page this server serves. It is
- * not much of a secret and does not pretend to be one: anything that can read
- * the page can read it. What it separates is "this app's own page recorded
- * something the host delivered to it" from "something else on this machine
- * guessed the port and posted", and on a loopback server that separation is not
- * otherwise available.
- *
- * ## Here it is worth more than it is in journeys, because of CORS
- *
- * The identical comment in `kehikko-journeys/doors.ts` goes on to say the
- * ticket separates less than it looks like it does, because a permissive
- * `Access-Control-Allow-Origin` lets any tab read `/app` and take it. That is
- * true of a module framed opaque, and it is exactly why this module declares
- * `storage: true` and sets no `server.cors` — see the essays in `manifest.ts`
- * and `vite.config.ts`. With a real origin, `/app` is unreadable from any other
- * origin, so the ticket is unreadable too, and it goes back to separating what
- * it says it separates.
- *
- * Reads are not gated on it. What is here is a copy of things other modules
- * already said out loud on a canvas; gating reads would mean an agent's `curl`
- * needing a ticket to see a page it can already open, and would buy nothing.
- */
+/** Printed into `/app` by `doors()`. Nothing here takes a write; it is minted because the page carries one. */
 export const TICKET = mintTicket()
 
-/** What this process is built from, said in the manifest, the health check, the page and a header on every answer. */
+/** What this process is built from, and when it started: said in the manifest, at `/healthz` and in the page. */
 export const BUILD = establishBuild({ version: VERSION, dir: import.meta.dirname })
 
-/** The most a request body may be, for the dev server and the built one alike. */
-export const MOST_READ = 256_000
-
-/** What a write without this process's ticket is told. Marked by `refuseTicket`, so the page's `ask()` reloads itself. */
-const NO_TICKET = 'that write did not come from this app’s own page'
-
-/* ------------------------------------------------------------------ *
- * Answers
- * ------------------------------------------------------------------ */
-
-const ok = (body: unknown): Reply => ({ status: 200, body })
-const bad = (why: string, status = 400): Reply => ({ status, body: { ok: false, error: why } })
-
-/**
- * One canvas out of a body, or null.
- *
- * Null is a legitimate value and not a parse failure: the host sends null when
- * it has no canvas open, and a door that turned that into a refusal would make
- * a hostless canvas undeliverable. What is refused is a kehikko that is present
- * and malformed, because that is somebody sending nonsense rather than sending
- * nothing.
- */
-function kehikkoOf(value: unknown): Kehikko | null {
-  if (!value || typeof value !== 'object') return null
-  const raw = value as { id?: unknown; name?: unknown; key?: unknown }
-  if (typeof raw.id !== 'number' || !Number.isFinite(raw.id)) return null
-  /* `key` (the stored identity of a kehikko) is kept when the host sent one, so a notice's `place.kehikko`
-     can be told apart from the kehikko it happened on. */
-  const key = str(raw.key, MAX_KEY).trim()
-  return { id: raw.id, name: str(raw.name, MAX_NAME), ...(key ? { key } : {}) }
-}
-
-/**
- * Where a press on a notice goes (`place`, protocol 1.4.0): bounded and reduced to what a press can
- * use. `null` when the sender said nothing usable — and then the notice is a notice without a place.
- */
-function placeOf(value: unknown): { epic?: string; parts?: string[]; kehikko?: string } | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const raw = value as { epic?: unknown; parts?: unknown; kehikko?: unknown }
-  const epic = str(raw.epic, MAX_EPIC).trim()
-  const kehikko = str(raw.kehikko, MAX_KEY).trim()
-  const parts = Array.isArray(raw.parts)
-    ? raw.parts.filter((one): one is string => typeof one === 'string').map((one) => str(one, MAX_EPIC).trim()).filter(Boolean).slice(0, MAX_PLACE_PARTS)
-    : []
-  const place = { ...(epic ? { epic } : {}), ...(parts.length ? { parts } : {}), ...(kehikko ? { kehikko } : {}) }
-  return Object.keys(place).length ? place : null
-}
-
-/**
- * Every door but the page.
- *
- * `null` means "this path is not ours", and the caller passes it on to Vite —
- * which is how the page, the client module and Vite's own hot-reload socket
- * keep working without being enumerated here.
- */
 export function answer(
   method: string,
   path: string,
-  query: URLSearchParams,
-  body: Record<string, unknown> | null,
-  ticket: string | null,
+  _query: URLSearchParams,
+  _body: Record<string, unknown> | null,
+  _ticket: string | null,
 ): Reply | null {
-  /* No project here, deliberately: a health check is about this program, and
-     which project's store is how full is not a question it can answer. */
-  if (path === '/healthz') {
-    return ok({ ok: true, id: ID, version: VERSION, keep: KEEP })
-  }
-
-  /*
-   * One project's list. The project is a query parameter because a GET has no
-   * body; the page takes it off `kehikot.context.projectPath`.
-   *
-   * No project, or a refused one, is still a 200 — with `nowhere` or `trouble`
-   * saying which — because the page has to draw that state rather than treat
-   * it as this server being down. Reads are never refused for want of a
-   * ticket; see `TICKET`.
-   */
-  if (path === '/api/notifications' && method === 'GET') {
-    return ok({ ok: true, ...standing(projectOf(query.get('project'))) })
-  }
-
-  if (method === 'POST' && path.startsWith('/api/')) {
-    /* The gate on every write, one line, because the whole argument for it is
-       in `TICKET` above. */
-    const refused = refuseTicket(ticket, TICKET, NO_TICKET)
-    if (refused) return refused
-    if (!body) return bad('that was not a request')
-
-    /*
-     * One event, as this app's own page relays it out of a `kehikot.event`.
-     *
-     * `from` is taken from the body and that is not a hole, because of where
-     * the body comes from: the page copies it off the message the HOST posted
-     * into the frame, and the host took it off its own registry rather than
-     * from anything the sender said. This door cannot re-derive it — it has no
-     * registry and no wire — so what it can do is bound it and never invent it.
-     * A row with no `from` is refused rather than stored as "unknown", because
-     * a notification panel whose whole job is attribution must not hold a line
-     * it cannot attribute.
-     */
-    const project = projectOf(body.project)
-
-    if (path === '/api/notifications') {
-      const from = str(body.from, MAX_ID).trim()
-      if (!from) return bad('a notification with nobody to attribute it to is not one')
-      const payload = (body.payload ?? {}) as Record<string, unknown>
-      const at = str(body.at, MAX_AT).trim()
-      const done = record(project, {
-        from,
-        /* The host's `at` when there is one, and this app's clock only as a
-           last resort. A row stamped by the receiver would be ordered by this
-           app's own scheduler, which the protocol is explicit is the wrong
-           clock — but a row with no time at all cannot be drawn, so the
-           fallback exists and the two are never mixed silently: `at` from the
-           host is always present on a real event. */
-        at: at || new Date().toISOString(),
-        kehikko: kehikkoOf(body.kehikko),
-        payload: {
-          epic: str(payload.epic, MAX_EPIC),
-          message: str(payload.message, MAX_MESSAGE),
-          level: str(payload.level, 32) || 'info',
-          refs: refs(payload.refs),
-          ...(typeof payload.step === 'number' && Number.isFinite(payload.step)
-            ? { step: payload.step }
-            : {}),
-          ...(placeOf(payload.place) ? { place: placeOf(payload.place) } : {}),
-        },
-      })
-      /* 409 for "no project" and for a refused one: the request was fine, the
-         state of the world is what stops it, and the sentence says which. */
-      if (!done.ok) return bad(done.error, 409)
-      return ok({ ok: true, row: done.value, ...standing(project) })
-    }
-
-    /*
-     * Discard rows: the ones named, or all of them.
-     *
-     * `seqs` arrives when the page is honouring the host's clear control, which
-     * clears what is SHOWN — and what "shown" means is a question only this
-     * module can answer, since it is the one that narrowed the list. See
-     * `forget` in `store.ts`, and the protocol's `kehikot.clear` on why the
-     * message that starts all this carries no ids at all.
-     *
-     * No `seqs` still means everything, which is what this door has always
-     * meant and what any caller that has not been updated still means.
-     *
-     * The list is bounded at `KEEP` before it reaches the store: nothing beyond
-     * that many rows can exist, so a longer one is either a mistake or somebody
-     * making this door do work proportional to whatever they can type.
-     * Non-numbers are dropped rather than refusing the whole request, because a
-     * clear that half-worked is worse than one that skipped an id nothing
-     * matched — and an id matching nothing is already the ordinary case, for a
-     * row trimmed between the render and the press.
-     */
-    if (path === '/api/forget') {
-      const asked = body.seqs
-      if (asked !== undefined && asked !== null && !Array.isArray(asked)) {
-        return bad('seqs has to be a list of row numbers')
-      }
-      const seqs = Array.isArray(asked)
-        ? asked.filter((one): one is number => typeof one === 'number' && Number.isFinite(one)).slice(0, KEEP)
-        : undefined
-      const done = forget(project, seqs)
-      if (!done.ok) return bad(done.error, 409)
-      return ok({ ok: true, forgotten: done.value, ...standing(project) })
-    }
-
-    return bad('no such door here', 404)
-  }
-
-  if (path === '/api/notifications' || path === '/api/forget') {
-    return bad('that door takes a different method', 405)
-  }
-
+  if (path === '/healthz') return { status: 200, body: { ok: true, id: ID, version: VERSION, keeps: 'nothing: the Inbox is the host’s record' } }
+  if (path === '/mcp') return { status: 404, body: { ok: false, error: 'Inbox has no tools for agents: only the person acts on their Inbox.' } }
+  /* An unknown path under /api/ is ours to refuse, not Vite's to serve as a file. */
+  if (path.startsWith('/api/')) return { status: 404, body: { ok: false, error: `not here (${method} ${path.slice(0, 80)})` } }
   return null
-}
-
-/**
- * The project a caller named, bounded, or null for none.
- *
- * Only bounded here; resolving it and fencing what is under it is the store's
- * job, because the store is where the filesystem is.
- */
-function projectOf(value: unknown): string | null {
-  const named = str(value, MAX_PROJECT).trim()
-  return named || null
 }
 
 export { MANIFEST }

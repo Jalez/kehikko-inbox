@@ -1,494 +1,705 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { navigationResult } from 'kehikot-module-protocol'
-import { ask } from 'kehikot-module-protocol/client'
-import { Cover, coverFor, useHost, useServerStanding, type CoverState } from 'kehikot-module-protocol/client/react'
+import { BellOff, ChevronDown, ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 
-import { FORMAT, ID } from '../manifest.ts'
-import type { Kehikko, Row } from '../store.ts'
-import { OFFER, scopeFrom, sift, type Scope } from './sift.ts'
-import { Line } from './view/line.tsx'
+import type { InboxItem, InboxKey, InboxLogResult, InboxReadResult, PressValue } from 'kehikot-module-protocol'
+import { Cover, coverFor, useServerStanding } from 'kehikot-module-protocol/client/react'
+import { Button, Collapsible, CollapsibleContent, CollapsibleTrigger, cn } from 'kehikot-module-protocol/client/ui'
 
-/**
- * The page: this app's own store on one side, the wire on the other, and one
- * list between them.
- *
- * ## The order everything happens in
- *
- * 1. Listen. The mailbox replays whatever already arrived, so a greeting that
- *    landed before React mounted is not lost.
- * 2. Read the store of the project the greeting names. The store lives inside
- *    that project (`.kehikot/notifications/`), so with no project — a page
- *    opened directly on this port, or a canvas with none — there is nothing to
- *    read, and the page says so rather than drawing an empty list.
- * 3. Re-read the store whenever an event lands, and whenever the project moves.
- *
- * ## The wire underneath, which is not written here
- *
- * The listener is the protocol's `useHost`: the greeting race (the mailbox,
- * imported for its side effect in `main.tsx`), the connection stored before it
- * listens, the theme put on `<html>`, and the context flattened are all its.
- * The `goto` backstop is passed explicitly as 900ms because that was THIS
- * module's number and the client's default is 500.
- *
- * This is the only module in the family that handles `kehikot.event`, and an
- * event is re-sent by nobody: the protocol is explicit that delivery is
- * best-effort and one sent to a module still loading is lost. Which is why
- * there is a store behind this page and not merely a list in state, and why
- * the project is tracked in the wire's own handlers (see `project` below)
- * rather than read back out of React state a render later.
- *
- * ## This app's own server, and what happens when it does not answer
- *
- * Every call is the protocol's `ask()`, which carries the write ticket and
- * turns each failure into one typed result. Nothing answered: the shared cover
- * says so, with Try again, and the list is kept underneath rather than emptied
- * — a fetch that failed is not evidence that the store is empty. The server
- * restarted under this page: the page reloads itself, once. The server said no
- * to a write: its own sentence is printed above the list, because an event
- * that was not written down is exactly the thing this panel must not be quiet
- * about.
- */
+import { ATTENTION, Dot, Question, Ring, Row, SectionHeading, type Answered, type Said } from '@/components/parts'
+import { footerItems } from '@/footer'
+import { headerItems, pressHeader } from '@/header'
+import {
+  DEFAULT_FILTER,
+  NOTHING_NEEDS_YOU,
+  OLD_HOST,
+  PROJECT_GROUP,
+  SMALL_BELOW,
+  STOP_TITLE,
+  ageWords,
+  arrange,
+  findItem,
+  fold,
+  keyOf,
+  mutedWords,
+  placeSaid,
+  stateSaid,
+  stopWords,
+  tallyOf,
+  tallySaid,
+  topOf,
+  type Arranged,
+  type Filter,
+} from '@/inbox'
+import { answersNoInbox, inboxApi, isTooOld, sentence, type InboxApi } from '@/wire/inbox-api'
+import { useKehikot, type Host } from '@/wire/use-kehikot'
 
-/**
- * The key this page used to remember its filter in, kept only to be deleted.
- *
- * ## Why it is abandoned rather than migrated
- *
- * `localStorage` is per BROWSER. This page is loaded once and shown on whichever
- * kehikko asks for it, so one key was one value shared by every container of
- * this module on every canvas — two of them side by side, one meant to show
- * this kehikko and one meant to show everything, would overwrite each other and
- * the last press would win. That is not a limitation of the old code; it is the
- * bug that moving the filter to the host fixes, because the host stores a
- * choice against the CONTAINER.
- *
- * Migrating the value would push that one browser-wide answer into every
- * container's store on every canvas — which is the bug being fixed, written
- * once into a database that outlives it. So it is not read.
- *
- * And it could not be, even if it should be. There is no message for a module
- * to SET its own filter, deliberately: the host owns the choice, the module
- * owns the offer, and a module that could write the choice would be a module
- * that can override a press. What is lost is one preference, once, on the day
- * this module is updated; what a person does about it is press the control
- * again, in the header, where it now lives.
- *
- * Removed rather than left lying, so that the next person reading this file
- * does not find a live-looking key that nothing writes.
- */
-const RETIRED_SCOPE_KEY = 'kehikko-notifications:scope'
-
-interface Standing {
-  rows?: unknown
-  held?: unknown
-  keep?: unknown
-  nowhere?: unknown
-  trouble?: unknown
+/** A `kehikot.inbox` the host sent, numbered so the same signal twice is two. */
+export interface Signal {
+  kind: 'changed' | 'next'
+  next: InboxKey | null
+  n: number
 }
 
+/** What a press in the host's footer reaches in the screen. */
+export type Presses = MutableRefObject<{ next(): void } | null>
+
+type After = (done: Promise<{ outcome: string; why: string }>, taken: string) => Promise<void>
+
+/** The page: the host's one record of what modules need, are doing and have said, read and acted on for the person. */
 export function App() {
-  const [rows, setRows] = useState<Row[]>([])
-  const [held, setHeld] = useState(0)
-  const [keep, setKeep] = useState(0)
-  /** Which project the rows on screen were read for. Not the open one: the read is still on its way. */
-  const [readFor, setReadFor] = useState<string | null>(null)
-  /** The store's own word on why there is nothing to read: no project, or a refused one. */
-  const [nowhere, setNowhere] = useState(false)
-  const [trouble, setTrouble] = useState<string | null>(null)
-  /** What this app's own server said when it refused a write. Printed, because a lost event must not be silent. */
-  const [refusal, setRefusal] = useState<string | null>(null)
+  const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER)
+  const [signal, setSignal] = useState<Signal | null>(null)
+  const presses: Presses = useRef(null)
+  const filterNow = useRef(filter)
+  filterNow.current = filter
 
-  /**
-   * The `seq` of every row currently on screen, as of the last render.
-   *
-   * A ref rather than state, and it exists for one reason: a press on the host's
-   * clear control has to act on what is showing NOW, and it can arrive between
-   * a render and its effects.
-   *
-   * This is the whole of what makes the host's clear control compose with the
-   * host's filter control. What arrives from the host is a press with nothing
-   * in it; WHICH rows go is decided here, out of the list this page actually
-   * drew, under whatever scope the filter had it on. A page that answered
-   * `onClear` by emptying its store would delete everything while somebody
-   * could see three lines.
-   */
-  const showing = useRef<number[]>([])
-
-  /**
-   * A write. `ask` carries the ticket and never throws. A refusal is printed in
-   * the server's own words; nothing answering, or this page being older than
-   * its server, is said by the shared cover (and the second reloads the page).
-   */
-  const post = useCallback(async (path: string, body: Record<string, unknown>, failing: string): Promise<void> => {
-    /* The project that is open NOW, which is the host's standing ahead of the render: the mailbox
-       replays a greeting and the events behind it before React has drawn the greeting. */
-    const asked = await ask(path, { body: { ...body, project: host.read().projectPath } })
-    if (asked.ok) setRefusal(null)
-    else if (asked.kind === 'refused') setRefusal(`${failing}: ${asked.error}`)
-  }, [])
-
-  const refresh = useCallback(async (): Promise<void> => {
-    const asked = host.read().projectPath
-    /* No project, nothing to read: the store lives inside one. The cover says which kind of nothing. */
-    if (asked === null) return
-    const read = await ask<Standing>('/api/notifications', { query: { project: asked } })
-    /* A context that moved us on while this was in flight has made this
-       answer about a project nobody is standing in. */
-    if (host.read().projectPath !== asked) return
-    if (!read.ok) {
-      /* Rows left as they were rather than emptied. A read that failed is not
-         evidence that the store is empty, and drawing an empty panel over a
-         network blip would be this page inventing a quiet machine. Nothing
-         answering is the cover's to say; a refusal is said here. */
-      if (read.kind === 'refused') {
-        setTrouble(read.error)
-        setReadFor(asked)
-      }
+  /* One handler for the header's switches (the person's, or the kept view putting them back) and the footer's Next. */
+  const onPress = ({ item, value }: { item: string; value?: PressValue }) => {
+    if (item === 'next') {
+      presses.current?.next()
       return
     }
-    const body = read.body ?? {}
-    setRows(Array.isArray(body.rows) ? (body.rows as Row[]) : [])
-    if (typeof body.held === 'number') setHeld(body.held)
-    if (typeof body.keep === 'number') setKeep(body.keep)
-    setNowhere(body.nowhere === true)
-    setTrouble(typeof body.trouble === 'string' ? body.trouble : null)
-    setReadFor(asked)
-  }, [])
+    const got = pressHeader(filterNow.current, item, value)
+    if (typeof got === 'string') return got
+    filterNow.current = got
+    setFilter(got)
+  }
+  const onInbox = ({ kind, next }: { kind: 'changed' | 'next'; next: InboxKey | null }) =>
+    setSignal((was) => ({ kind, next, n: (was?.n ?? 0) + 1 }))
+  const host = useKehikot({ onPress, onInbox })
+  const api = useMemo(() => inboxApi(host.request), [host.request])
 
-  /**
-   * A press on a notice that says where it happened (`place`, protocol 1.4.0).
-   *
-   * `view.goto` with `place.epic ?? epic`, the parts and the kehikko, as the protocol's essay on
-   * `notificationPayload` spells the press. The host's own sentence is the answer when it would
-   * not go, printed in the line this page already has for what it could not do: there is no new
-   * row. A host before 1.4.0 strips `parts` and `kehikko` and takes the person to the epic, which
-   * is a reasonable place to have been taken.
-   */
-  const go = useCallback(async (row: Row): Promise<void> => {
-    const place = row.payload.place
-    const epic = place?.epic || row.payload.epic
-    if (!place || !epic) return
-    const params: Record<string, unknown> = { epic }
-    if (place.parts?.length) params.parts = place.parts
-    if (place.kehikko) params.kehikko = place.kehikko
-    try {
-      const said = navigationResult.safeParse(await host.request('view.goto', params))
-      if (said.success && said.data.outcome === 'moved') setRefusal(null)
-      else if (said.success) setRefusal(said.data.why || (said.data.outcome === 'no-such-target' ? 'The host has no such place.' : 'The host would not go there now.'))
-      else setRefusal('The host did not say whether it went.')
-    } catch (error) {
-      setRefusal(error instanceof Error && error.message ? error.message : 'The host did not answer.')
+  return <Screen host={host} api={api} filter={filter} onFilter={setFilter} signal={signal} presses={presses} />
+}
+
+const PAGE = 20
+
+export function Screen({
+  host,
+  api,
+  filter,
+  onFilter = () => {},
+  signal = null,
+  presses,
+  now = () => Date.now(),
+  box: given,
+}: {
+  host: Host
+  api: InboxApi
+  filter: Filter
+  onFilter?: (filter: Filter) => void
+  signal?: Signal | null
+  presses?: Presses
+  now?: () => number
+  /** The page's height, when a test says it; else measured. */
+  box?: { height: number }
+}) {
+  const root = useRef<HTMLDivElement>(null)
+  const measured = useHeight(root)
+  const height = given?.height ?? measured
+  const small = height !== null && height < SMALL_BELOW
+
+  const server = useServerStanding()
+  const cover = coverFor({ ...host, server }, { project: true })
+  const [read, setRead] = useState<InboxReadResult | null>(null)
+  const readNow = useRef(read)
+  readNow.current = read
+  const [trouble, setTrouble] = useState<string | null>(null)
+  const [tooOldSaid, setTooOld] = useState(false)
+  const tooOld = tooOldSaid || answersNoInbox(host.answers)
+  /* What the last act came to when it was not done — the host's sentence — or "Nothing needs you". */
+  const [said, setSaid] = useState<string | null>(null)
+  const [highlight, setHighlight] = useState<string | null>(null)
+  const hosted = host.where === 'hosted'
+
+  const reread = useCallback(() => {
+    api.read().then(
+      (got) => {
+        setRead(got)
+        setTrouble(null)
+      },
+      (error: unknown) => {
+        if (isTooOld(error)) setTooOld(true)
+        else setTrouble(sentence(error))
+      },
+    )
+  }, [api])
+
+  /* Read on the greeting, and again in another project. */
+  useEffect(() => {
+    if (hosted && !answersNoInbox(host.answers)) reread()
+  }, [hosted, host.projectPath, host.answers, reread])
+
+  /* And whenever the page is shown again: by the host (`kehikot.visible`) or by the browser. */
+  const visible = host.visible ?? true
+  const wasVisible = useRef(visible)
+  useEffect(() => {
+    if (visible && !wasVisible.current && hosted) reread()
+    wasVisible.current = visible
+  }, [visible, hosted, reread])
+  useEffect(() => {
+    if (!hosted) return
+    const shown = () => {
+      if (document.visibilityState === 'visible') reread()
     }
-  }, [])
+    document.addEventListener('visibilitychange', shown)
+    return () => document.removeEventListener('visibilitychange', shown)
+  }, [hosted, reread])
 
-  /**
-   * The wire, which is the protocol's `useHost`: connected once, handlers read
-   * through a ref (so nothing below needs memoising), the theme put on `<html>`.
-   *
-   * `kept` is unused: this page asks the host to keep nothing — it has its own
-   * store on its own origin, which is where every row it draws comes from, and
-   * the filter is the host's, stored against the container.
-   */
-  const host = useHost(
-    ID,
-    {
-      /**
-       * One notification another module emitted.
-       *
-       * Written down BEFORE it is drawn, and then drawn from what the store
-       * answers rather than from what arrived. That round trip could be skipped
-       * — the event is right here — and skipping it is how a panel ends up
-       * showing a row that is not in the store, so a reload silently loses it
-       * and nobody can tell which of the two was wrong. One source of truth,
-       * and it is the store.
-       *
-       * `from`, `at` and `kehikko` are copied off the envelope the HOST
-       * composed and never out of the payload. The payload is the sender's
-       * claim; the envelope is the host's, and that difference is the only
-       * thing that makes an attribution on this page worth printing.
-       */
-      onEvent: (event) => {
-        /* `kehikot.notifications@1` is this format. Anything else is not a
-           notification, whatever route it took here. */
-        if (event.extension && event.extension !== FORMAT) return
-        /* No project, nowhere to keep it — and the page already says so. The
-           event is not held in memory to be written "later": later is a
-           different project, or none. */
-        if (host.read().projectPath === null) return
-        void post(
-          '/api/notifications',
-          { from: event.from, at: event.at, kehikko: event.kehikko, payload: event.payload },
-          'A notification arrived and was not recorded',
-        ).then(refresh)
-      },
-
-
-      /**
-       * A walk, declined — immediately, rather than left to the host's timeout.
-       *
-       * This container is a stream of what modules have said. It has no anchors and
-       * nothing to scroll to, and the honest answer is available at once. A
-       * module that let the backstop answer would turn a hundred milliseconds
-       * into a container visibly doing nothing while a person waits for a press to
-       * land somewhere.
-       */
-      onGoto: (_goto, answer) => {
-        answer(false, 'This container is a stream of what modules have said. There is nothing in it to walk to.')
-      },
-
-      /**
-       * The host's delete control, pressed twice.
-       *
-       * ## What goes is exactly what is on screen
-       *
-       * `showing` holds the `seq` of every row this page last drew, under
-       * whatever scope the header's filter has it on. That is the whole of the
-       * design: the host sends a press with no ids in it, because it sees rows
-       * it does not render in a document it cannot read, and only this module
-       * can answer what "shown" means.
-       *
-       * So a person on `this kehikko` who presses clear discards this kehikko's
-       * lines and keeps the rest, and the same person on `all` discards
-       * everything. Both are what the control says it will do, because the
-       * label counts the same list this sends.
-       *
-       * ## What this changes about `Forget`, said out loud
-       *
-       * The button this replaces sat in this app's own bar and always meant
-       * everything, whatever the filter was on. That was not a considered
-       * position so much as the state of things before the filter moved to the
-       * header: the bar could not see the filter and the filter could not see
-       * the bar.
-       *
-       * The behaviour on `all` is identical. On `this kehikko` it is now
-       * narrower, and narrower is the correct reading of a control that sits
-       * beside the filter and counts what the filter left. Somebody who wants
-       * the lot presses `Show everything` in the filter first, which is one
-       * press and is visible on screen; the reverse — a button that quietly
-       * deletes more than it says — has no such recovery.
-       *
-       * ## No guard here, deliberately
-       *
-       * The two presses happen on the host's side of the frame, where they can
-       * be drawn. A `confirm()` here would return `false` silently under the
-       * host's sandbox and this would simply never run — the failure that cost
-       * the checklist module an afternoon, and the reason the arm is the host's.
-       */
-      onClear: () => {
-        void post('/api/forget', { seqs: showing.current }, 'Nothing was forgotten').then(refresh)
-      },
-    },
-    /* 900ms, which is this module's own number and not the client's 500. The
-       option exists so adoption keeps each module's timing rather than
-       unifying it by accident; changing it should be somebody deciding to,
-       not a refactor's side effect. */
-    { gotoBackstop: 900 },
+  /** Say what an act came to when it was not taken, and read the record again. */
+  const after: After = useCallback(
+    (done, taken) =>
+      done.then(
+        (got) => {
+          setSaid(got.outcome === taken ? null : got.why || 'Kehikot did not do that.')
+          reread()
+        },
+        (error: unknown) => setSaid(sentence(error)),
+      ),
+    [reread],
   )
 
-  /**
-   * Which scope this container is on, as the HOST last said, and which kehikko.
-   *
-   * Not remembered here, and not remembered anywhere in this program. The scope
-   * belongs to the container (protocol 2.29.0) — the host keeps the person's
-   * pick with the arrangement and says it in `context.scope` on every context,
-   * so a pick in the settings window and a switch between two containers of
-   * this module both land the same way.
-   */
-  const scope: Scope = scopeFrom(host.workingScope)
-  const here: Kehikko | null = host.kehikko
-  /* Which project's store this page reads: the store lives inside the project
-     (`.kehikot/notifications/`), so this is the one field that changes WHICH store is on screen. */
-  const current = host.projectPath
+  /** Go to an item: the host goes to its place. Called from a press, or for a host's `next`. */
+  const open = useCallback(
+    (key: InboxKey, project?: number) => {
+      setHighlight(keyOf(key, project))
+      void after(api.open({ module: key.module, id: key.id }, project), 'opened')
+    },
+    [api, after],
+  )
 
-  /* It re-reads everything when it moves: a new project is a different file. What was on screen
-     goes first, and until the read lands the cover below says loading, so the previous project's
-     lines are never drawn under the new one. */
+  /** Next: what the host says needs the person first, or "Nothing needs you". */
+  const goNext = useCallback(
+    (key: InboxKey | null) => {
+      if (!key) {
+        setHighlight(null)
+        setSaid(NOTHING_NEEDS_YOU)
+        return
+      }
+      const found = readNow.current ? findItem(readNow.current, key) : null
+      open(key, found?.project?.id)
+    },
+    [open],
+  )
+
+  /* The footer's Next, pressed in the host's footer: the next thing as last read. */
   useEffect(() => {
-    setRows([])
-    setHeld(0)
-    setReadFor(null)
-    setNowhere(false)
-    setTrouble(null)
-    setRefusal(null)
-    void refresh()
-  }, [current, refresh])
-
-  const { filters, clearable } = host
-  useEffect(() => {
-    /*
-     * What this container can be narrowed by, said once.
-     *
-     * Once is enough, and only because the client replays the last offer after
-     * every `ready` — a frame that reloads is greeted again, and a page whose
-     * offer has not changed would otherwise have no reason to send anything and
-     * would silently lose its control. A module whose LABELS carry a count has
-     * to send again whenever the count changes; these two words never change,
-     * so this is the whole of it.
-     *
-     * In an effect declared after `useHost`, so the connection is already
-     * listening and a host which greeted before this page mounted — the
-     * ordinary case, which is why the mailbox exists — has already been
-     * answered. Sent unconditionally: a page with no host posts into nothing,
-     * which costs nothing.
-     */
-    /* An empty offer (protocol 2.29.0): which kehikko is the scope now, not a filter. */
-    filters([...OFFER])
-
-    /* The old per-browser key, taken out. See `RETIRED_SCOPE_KEY`. */
-    try {
-      localStorage.removeItem(RETIRED_SCOPE_KEY)
-    } catch {
-      /* A page framed without `allow-same-origin` cannot reach localStorage and
-         THROWS rather than answering null. Nothing here needs it to work. */
+    if (!presses) return
+    presses.current = { next: () => goNext(readNow.current?.next ?? null) }
+    return () => {
+      presses.current = null
     }
-  }, [filters])
+  }, [presses, goNext])
 
-  /*
-   * Every not-ready moment is the protocol's one cover, and the order is what
-   * makes it true: a page that has not been greeted is `waiting`, never "no
-   * project", and a page nothing is framing says that rather than asking for a
-   * project nobody could open. `stale` first, because that page is about to
-   * reload whatever else is so.
-   */
-  const server = useServerStanding()
-  const cover: CoverState | null =
-    coverFor({ where: host.where, projectPath: current, server })
-    ?? (readFor !== current ? 'loading' : nowhere || trouble ? 'no-project' : null)
-
-  const sifted = sift(rows, scope, here)
-
-  /*
-   * What is on screen, kept where the wire can read it, and announced.
-   *
-   * Written during render rather than in an effect, so that a press arriving
-   * between a render and its effects acts on the list that was drawn rather
-   * than on the one before it. There is nothing to clean up and nothing anybody
-   * else reads, so the usual objection to writing a ref in render does not
-   * apply — and a delete acting on a stale list is not a stale list, it is the
-   * wrong rows.
-   */
-  /* Under a cover nothing is shown, so a press acts on nothing and nothing is offered to clear. */
-  showing.current = cover ? [] : sifted.rows.map((row) => row.seq)
-
-  /*
-   * The offer, re-announced whenever the count changes.
-   *
-   * Unlike the filter offer — announced once, because its two words never move
-   * — this label carries a NUMBER, and the number is the whole reason a person
-   * reads the control before pressing it. It is how they discover that their
-   * filter has narrowed things to three rather than thirty, which is the
-   * difference between the press they meant and the press they did not.
-   *
-   * `null` when there is nothing on screen, which withdraws the control. A
-   * delete button that deletes nothing teaches a person that the button does
-   * not work, and they will remember that on the day it would have.
-   *
-   * The word is this module's own. The host quotes it and does not paraphrase
-   * it — it has no idea what is being counted — so `forget` stays the verb this
-   * app has always used for this, and it now appears in a tooltip in the
-   * container header instead of on a button in a bar.
-   */
-  const count = showing.current.length
+  /* What the host said: the record changed (read it again), or the person pressed its shortcut for
+     the next thing that needs them (go to it now, inside the host's few seconds). Each signal once. */
+  const handled = useRef(0)
   useEffect(() => {
-    clearable(count === 0 ? null : `forget ${count} shown`)
-  }, [count, clearable])
+    if (!signal || handled.current === signal.n) return
+    handled.current = signal.n
+    if (signal.kind === 'changed') reread()
+    else goNext(signal.next)
+  }, [signal, reread, goNext])
+
+  /* The highlighted row is scrolled to, and the highlight goes after a moment. */
+  useEffect(() => {
+    if (!highlight) return
+    const row = [...document.querySelectorAll<HTMLElement>('[data-key]')].find((one) => one.dataset.key === highlight)
+    if (row && typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' })
+    const timer = setTimeout(() => setHighlight(null), 6000)
+    return () => clearTimeout(timer)
+  }, [highlight])
+
+  const arranged = useMemo(() => (read ? arrange(read, filter) : null), [read, filter])
+  const tally = useMemo(() => (arranged ? tallyOf(arranged) : null), [arranged])
+
+  /* The header: the filter, declared again whenever it changes; nothing on a host that cannot answer. */
+  const { header } = host
+  const items = useMemo(() => headerItems(filter, tooOld), [filter, tooOld])
+  useEffect(() => header(items), [header, items])
+
+  /* The footer the host draws: the count and Next beside it. */
+  const drawsFooter = hosted && host.drawsFooter === true
+  const footerSaid = drawsFooter && !cover ? JSON.stringify(footerItems({ tally, next: Boolean(read?.next), trouble, tooOld })) : null
+  const { footer } = host
+  useEffect(() => {
+    if (footerSaid) footer?.(JSON.parse(footerSaid))
+  }, [footer, footerSaid])
+
+  /* The host's cover comes off once the page has drawn what it shows: the record, why it could not
+     be read, or the sentence for a host that does not answer it. */
+  const drawn = read !== null || trouble !== null || tooOld || cover === 'down' || cover === 'stale'
+  const { ready } = host
+  useEffect(() => {
+    if (drawn) ready?.()
+  }, [ready, drawn])
 
   return (
-    <div className="flex min-h-screen min-w-0 flex-col">
-      {/*
-        A write this app's own server refused, in its own words. Above the
-        cover as well as above the list: an event that was not written down is
-        gone, and that is not something to hide behind "loading".
-      */}
-      {refusal ? (
-        <p
-          role="alert"
-          className="m-0 min-w-0 border-b px-2.5 py-2 text-[0.72rem] text-muted-foreground [overflow-wrap:anywhere] @[340px]/container:px-3"
-        >
-          {refusal}
-        </p>
-      ) : null}
-
-      {/*
-        No project, or a refused one — said instead of the list, because neither
-        is "nothing has happened". The store lives inside the project, and a
-        panel with no project open has nowhere to read from or record into. The
-        shared sentence, and this module's own reason under it.
-      */}
+    <div ref={root} className="flex h-screen min-w-0 flex-col text-sm" data-small={small ? '' : undefined}>
       {cover ? (
-        <Cover
-          state={cover}
-          name="Notifications"
-          onRetry={() => void refresh()}
-          detail={
-            cover !== 'no-project'
-              ? null
-              : trouble
-                ? /* The store's sentence starts mid-clause; here it is a line of its own. */
-                  trouble.charAt(0).toUpperCase() + trouble.slice(1)
-                : 'Notifications are kept inside the project they happened in, at .kehikot/notifications/.'
-          }
-        >
-          {cover === 'no-project' && trouble ? 'Nothing can be shown or recorded here.' : undefined}
-        </Cover>
-      ) : null}
-
-      {/* Kept mounted under a cover: the list is this page's last true reading, and it comes back as it was. */}
-      <div hidden={cover !== null} className="min-w-0">
-        {sifted.cannot ? (
-          <p className="m-0 min-w-0 border-b px-2.5 py-2 text-[0.72rem] text-muted-foreground @[340px]/container:px-3">
-            <strong className="font-semibold text-foreground">Showing everything. </strong>
-            {sifted.cannot}
-          </p>
-        ) : (
-          scope === 'here' &&
-          sifted.unplaceable > 0 && (
-            <p className="m-0 min-w-0 border-b px-2.5 py-2 text-[0.72rem] text-muted-foreground @[340px]/container:px-3">
-              {sifted.unplaceable} more {sifted.unplaceable === 1 ? 'line' : 'lines'} happened while no kehikko was
-              open, so they are neither here nor elsewhere. Switch to All to read them.
-            </p>
-          )
-        )}
-
-
-        {/*
-          The empty state, and the one place `held` and `keep` still appear.
-
-          The bar above this used to show "N held" beside a Forget button, and
-          both are gone — the count went into the label of the host's delete
-          control, which counts what is SHOWN and is a better number for a person
-          about to press something. But `held` counts what is in the STORE, which
-          is a different fact and is load-bearing exactly here: a container
-          narrowed to a quiet kehikko is empty for two entirely different reasons,
-          and "nothing has happened" and "nothing has happened HERE, and eleven
-          things happened elsewhere" must not read the same.
-
-          `keep` was the bar's tooltip — how many this container holds before the
-          oldest fall off — and it moves onto the same line rather than being
-          dropped with the component it happened to live in. Nothing else on this
-          page says it, and a person who has just been told eleven lines are held
-          elsewhere is the person most likely to wonder how many can be.
-        */}
-        {sifted.rows.length === 0 ? (
-          <div
-            className="px-3 py-5 text-center text-muted-foreground [overflow-wrap:anywhere]"
-            title={
-              `This container keeps the last ${keep} it has been shown. ` +
-              'Events are not history: one sent while this page was still loading was lost, and nothing resends it.'
-            }
-          >
-            {held === 0
-              ? 'Nothing yet. Modules that emit notifications appear here as they do — and only while this container is open, because events are not resent.'
-              : `Nothing on ${here?.name || 'this kehikko'}. ${held} held from elsewhere.`}
-          </div>
-        ) : (
-          <ul className="m-0 min-w-0 list-none p-0">
-            {sifted.rows.map((row) => (
-              <Line key={row.seq} row={row} here={here} parts={host.parts} onGo={go} />
-            ))}
-          </ul>
-        )}
-      </div>
+        <Cover state={cover} name="Inbox" onRetry={reread} />
+      ) : tooOld ? (
+        <div data-old-host="" className="flex min-h-0 flex-1 flex-col">
+          <Cover state="empty" name="Inbox">
+            {OLD_HOST}
+          </Cover>
+        </div>
+      ) : small ? (
+        <Small read={read} arranged={arranged} trouble={trouble} said={said} highlight={highlight} onOpen={open} />
+      ) : (
+        <>
+          <main data-kehikot-scroll className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 pb-1">
+            {said ? (
+              <p role="status" data-said="" className="text-muted-foreground px-2 pt-1.5 text-xs">
+                {said}
+              </p>
+            ) : null}
+            {trouble && !drawsFooter ? (
+              <p role="alert" data-trouble="" className="text-destructive px-2 pt-1.5 text-xs">
+                {trouble}
+              </p>
+            ) : null}
+            {read && arranged ? (
+              <List read={read} arranged={arranged} filter={filter} onFilter={onFilter} api={api} now={now} highlight={highlight} onOpen={open} after={after} setSaid={setSaid} />
+            ) : null}
+          </main>
+          {!drawsFooter && tally ? (
+            <footer className="flex shrink-0 items-center gap-2 border-t px-2 py-1 text-xs" data-own-footer="">
+              <span className={cn('min-w-0 flex-1 truncate', tally.needs ? ATTENTION : 'text-muted-foreground')}>{tallySaid(tally)}</span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-[11px]"
+                disabled={!read?.next}
+                title="Go to the next thing that needs you (Alt+Shift+N)"
+                onClick={() => goNext(read?.next ?? null)}
+              >
+                Next
+              </Button>
+            </footer>
+          ) : null}
+        </>
+      )}
     </div>
   )
+}
+
+/** A container one or two rows high: the count, and the top item on one pressable line. */
+function Small({
+  read,
+  arranged,
+  trouble,
+  said,
+  highlight,
+  onOpen,
+}: {
+  read: InboxReadResult | null
+  arranged: Arranged | null
+  trouble: string | null
+  said: string | null
+  highlight: string | null
+  onOpen(key: InboxKey, project?: number): void
+}) {
+  if (!read || !arranged) {
+    return trouble ? (
+      <p role="alert" className="text-destructive truncate px-2 py-1 text-xs">
+        {trouble}
+      </p>
+    ) : null
+  }
+  const tally = tallyOf(arranged)
+  const top = topOf(read, arranged)
+  const key = top ? keyOf(top.item, top.project?.id) : null
+  return (
+    <div className="flex min-w-0 items-center gap-2 px-2 py-1 text-xs" data-small-line="" title={said ?? undefined}>
+      <span className={cn('shrink-0 tabular-nums', tally.needs ? ATTENTION : 'text-muted-foreground')} data-small-count="">
+        {tallySaid(tally)}
+      </span>
+      {top ? (
+        <button
+          type="button"
+          data-key={key}
+          data-highlighted={highlight === key ? '' : undefined}
+          title={`${top.item.by} · ${stateSaid(top.item)}: ${top.item.label}`}
+          className="hover:bg-accent/60 focus-visible:ring-ring/50 flex min-w-0 flex-1 items-center gap-1.5 truncate rounded-sm px-1 text-left outline-none focus-visible:ring-[3px]"
+          onClick={() => onOpen(top.item, top.project?.id)}
+        >
+          <Dot state={top.item.state} />
+          <span className="text-muted-foreground shrink-0">
+            {top.item.by} · {stateSaid(top.item)}
+          </span>
+          <span className="min-w-0 truncate">{top.item.label}</span>
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function List({
+  read,
+  arranged,
+  filter,
+  onFilter,
+  api,
+  now: clock,
+  highlight,
+  onOpen,
+  after,
+  setSaid,
+}: {
+  read: InboxReadResult
+  arranged: Arranged
+  filter: Filter
+  onFilter(filter: Filter): void
+  api: InboxApi
+  now: () => number
+  highlight: string | null
+  onOpen(key: InboxKey, project?: number): void
+  after: After
+  setSaid(said: string | null): void
+}) {
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set())
+  const [mutedOpen, setMutedOpen] = useState(false)
+  /* Ages tick. */
+  const [now, setNow] = useState(clock)
+  useEffect(() => {
+    setNow(clock())
+    const timer = setInterval(() => setNow(clock()), 30_000)
+    return () => clearInterval(timer)
+  }, [clock, read])
+
+  const dismiss = (items: readonly InboxItem[], project?: number) =>
+    void after(api.act({ do: 'dismiss', keys: items.map(({ module, id }) => ({ module, id })), ...(project === undefined ? {} : { project }) }), 'done')
+  const mute = (item: InboxItem) =>
+    item.mutable ? { mute: { label: stopWords(item.by), title: STOP_TITLE, run: () => void after(api.use(item.module, false), 'done') } } : {}
+  const answer = (item: InboxItem, said: Said, project?: number): Promise<Answered> =>
+    api.answer({ module: item.module, id: item.id }, said, project).then(
+      (got): Answered => (got.outcome === 'sent' ? { ok: true } : { ok: false, why: got.why || 'Kehikot did not send it.' }),
+      (error: unknown): Answered => ({ ok: false, why: sentence(error) }),
+    )
+
+  const row = (item: InboxItem, project?: { id: number; name: string }, member = false) => {
+    const key = keyOf(item, project?.id)
+    return (
+      <Row
+        key={`${member ? 'member:' : ''}${key}`}
+        rowKey={key}
+        dot={<Dot state={item.state} />}
+        by={item.by}
+        state={stateSaid(item)}
+        label={item.label}
+        {...(item.detail ? { detail: item.detail } : {})}
+        place={placeSaid(item, project)}
+        age={ageWords(now, item.entered)}
+        urgent={item.priority === 'urgent'}
+        highlighted={highlight === key}
+        onPress={() => onOpen(item, project?.id)}
+        {...mute(item)}
+        {...(item.state !== 'working'
+          ? { action: { label: `dismiss ${item.label}`, title: 'Dismiss — it returns only if it changes', run: () => dismiss([item], project?.id) } }
+          : {})}
+      >
+        {item.question ? <Question question={item.question} onAnswer={(said) => answer(item, said, project?.id)} /> : null}
+      </Row>
+    )
+  }
+
+  const folded = (list: readonly InboxItem[], project?: { id: number; name: string }) =>
+    fold(list, project?.id).flatMap((group) => {
+      if (group.members.length === 1) return [row(group.head, project)]
+      const open = unfolded.has(group.key)
+      const out = [
+        <Row
+          key={group.key}
+          rowKey={group.key}
+          dot={<Dot state={group.head.state} />}
+          by={group.head.by}
+          state={stateSaid({ state: group.head.state })}
+          label={group.head.label}
+          place={placeSaid(group.head, project)}
+          age={ageWords(now, group.head.entered)}
+          urgent={group.members.some((one) => one.priority === 'urgent')}
+          count={group.members.length}
+          expanded={open}
+          pressTitle={open ? 'Fold these' : `Show all ${group.members.length}`}
+          onPress={() =>
+            setUnfolded((was) => {
+              const next = new Set(was)
+              if (next.has(group.key)) next.delete(group.key)
+              else next.add(group.key)
+              return next
+            })
+          }
+          {...mute(group.head)}
+          {...(group.head.state !== 'working'
+            ? { action: { label: `dismiss ${group.members.length} from ${group.head.by}`, title: 'Dismiss all of these', run: () => dismiss(group.members, project?.id) } }
+            : {})}
+        />,
+      ]
+      if (open) {
+        out.push(
+          <li key={`${group.key}:members`} className="border-border/60 ml-3 border-l">
+            <ul>{group.members.map((member) => row(member, project, true))}</ul>
+          </li>,
+        )
+      }
+      return out
+    })
+
+  const nothing = arranged.needs.length + arranged.working.length + arranged.finished.length + arranged.project.length === 0
+  const muted = read.muted
+  const moreElsewhere = filter.where === 'here' && read.items.some((one) => !one.here && !one.project && (filter.show === 'all' || one.state === 'attention'))
+
+  return (
+    <>
+      {nothing ? (
+        <div className="px-2 py-2 text-xs" data-empty="">
+          <p>{filter.where === 'here' ? 'Nothing here on this kehikko.' : NOTHING_NEEDS_YOU}</p>
+          {moreElsewhere ? (
+            <p className="text-muted-foreground mt-0.5">
+              There is more on other kehikot.{' '}
+              <button type="button" className="text-foreground underline underline-offset-2" onClick={() => onFilter({ ...filter, where: 'everywhere' })}>
+                Show everywhere
+              </button>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {arranged.needs.length ? (
+        <section aria-label="needs you" data-section="needs">
+          <SectionHeading count={arranged.needs.length}>Needs you</SectionHeading>
+          <ul>{folded(arranged.needs)}</ul>
+        </section>
+      ) : null}
+      {arranged.working.length ? (
+        <section aria-label="working" data-section="working">
+          <SectionHeading count={arranged.working.length}>Working</SectionHeading>
+          <ul>{folded(arranged.working)}</ul>
+        </section>
+      ) : null}
+      {arranged.finished.length ? (
+        <section aria-label="finished" data-section="finished">
+          <SectionHeading
+            count={arranged.finished.length}
+            after={
+              <button
+                type="button"
+                className="text-muted-foreground hover:text-foreground text-[11px]"
+                onClick={() => void after(api.act({ do: 'seen-all', scope: filter.where }), 'done')}
+              >
+                Mark finished as seen
+              </button>
+            }
+          >
+            Finished
+          </SectionHeading>
+          <ul>{folded(arranged.finished)}</ul>
+        </section>
+      ) : null}
+      {arranged.project.length ? (
+        <section aria-label="this project" data-section="project">
+          <SectionHeading count={arranged.project.length}>{PROJECT_GROUP}</SectionHeading>
+          <ul>{folded(arranged.project)}</ul>
+        </section>
+      ) : null}
+
+      {arranged.elsewhere.map(({ project, items }) => (
+        <section key={`project:${project.id}`} aria-label={`in ${project.name}`} data-section={`elsewhere-${project.id}`}>
+          <SectionHeading count={items.length}>{`In ${project.name}`}</SectionHeading>
+          <ul>{items.map((item) => row(item, project))}</ul>
+        </section>
+      ))}
+
+      {filter.show === 'all' ? (
+        <Earlier read={read} seen={arranged.seen} where={filter.where} api={api} now={now} after={after} setSaid={setSaid} onDismiss={(item) => dismiss([item])} />
+      ) : null}
+
+      {muted.length ? (
+        <Collapsible open={mutedOpen} onOpenChange={setMutedOpen} asChild>
+          <section aria-label="muted modules" data-muted={muted.length}>
+            <h3 className="px-1 pt-2 pb-0.5">
+              <CollapsibleTrigger className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex w-full items-center gap-1 rounded-sm px-0.5 text-[11px] outline-none focus-visible:ring-[3px]">
+                {mutedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+                <BellOff className="size-3" aria-hidden />
+                {mutedWords(muted.length)}
+              </CollapsibleTrigger>
+            </h3>
+            <CollapsibleContent asChild>
+              <ul>
+                {muted.map((one) => (
+                  <li key={one.id} data-muted-module={one.id} className="flex items-center gap-2 px-2 py-0.5 text-xs">
+                    <span className="min-w-0 flex-1 truncate">{one.name}</span>
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground text-[11px] underline underline-offset-2"
+                      aria-label={`show ${one.name} in the Inbox again`}
+                      onClick={() => void after(api.use(one.id, true), 'done')}
+                    >
+                      Show again
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </CollapsibleContent>
+          </section>
+        </Collapsible>
+      ) : null}
+    </>
+  )
+}
+
+/** Earlier: collapsed; what finished and was seen, then the log of what closed, a page at a time. */
+function Earlier({
+  read,
+  seen,
+  where,
+  api,
+  now,
+  after,
+  setSaid,
+  onDismiss,
+}: {
+  read: InboxReadResult
+  seen: InboxItem[]
+  where: Filter['where']
+  api: InboxApi
+  now: number
+  after: After
+  setSaid(said: string | null): void
+  onDismiss(item: InboxItem): void
+}) {
+  const [open, setOpen] = useState(false)
+  const [log, setLog] = useState<InboxLogResult | null>(null)
+  const [more, setMore] = useState(false)
+
+  /* The first page whenever it is opened, and again when the record or the kehikko shown changes. */
+  useEffect(() => {
+    if (!open) return
+    let live = true
+    api.log(where, 0, PAGE).then(
+      (got) => {
+        if (live) setLog(got)
+      },
+      (error: unknown) => {
+        if (live) setSaid(sentence(error))
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [open, where, read.rev, api, setSaid])
+
+  const loadMore = () => {
+    if (!log || more) return
+    setMore(true)
+    api.log(where, log.rows.length, PAGE).then(
+      (got) => {
+        setMore(false)
+        setLog((was) => (was ? { rows: [...was.rows, ...got.rows], more: got.more, total: got.total } : got))
+      },
+      (error: unknown) => {
+        setMore(false)
+        setSaid(sentence(error))
+      },
+    )
+  }
+
+  const total = (log?.total ?? read.earlier) + seen.length
+  if (total === 0) return null
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} asChild>
+      <section aria-label="earlier" data-section="earlier">
+        <h3 className="px-1 pt-2 pb-0.5">
+          <CollapsibleTrigger className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex w-full items-center gap-1 rounded-sm px-0.5 text-[11px] font-medium tracking-wide uppercase outline-none focus-visible:ring-[3px]">
+            {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            Earlier
+            <span className="font-normal tabular-nums normal-case">{total}</span>
+          </CollapsibleTrigger>
+        </h3>
+        <CollapsibleContent asChild>
+          <div>
+            <ul data-earlier="">
+              {seen.map((item) => (
+                <Row
+                  key={`seen:${keyOf(item)}`}
+                  rowKey={`seen:${keyOf(item)}`}
+                  dot={<Ring label="finished, seen" />}
+                  by={item.by}
+                  state="finished, seen"
+                  label={item.label}
+                  place={item.where}
+                  age={ageWords(now, item.entered)}
+                  dim
+                  action={{ label: `dismiss ${item.label}`, title: 'Dismiss — it returns only if it changes', run: () => onDismiss(item) }}
+                />
+              ))}
+              {log === null ? (
+                <li className="text-muted-foreground px-2 py-1 text-[11px]">Reading…</li>
+              ) : log.rows.length === 0 && seen.length === 0 ? (
+                <li className="text-muted-foreground px-2 py-1 text-[11px]">{where === 'here' ? 'Nothing earlier on this kehikko.' : 'Nothing earlier.'}</li>
+              ) : (
+                log.rows.map((one) => (
+                  <Row
+                    key={one.key}
+                    rowKey={`log:${one.key}`}
+                    dot={<Ring label={one.what} />}
+                    by={one.by}
+                    state={one.what}
+                    label={one.label}
+                    place={one.where}
+                    age={ageWords(now, one.at)}
+                    urgent={one.priority === 'urgent'}
+                    dim
+                    action={{
+                      label: `forget ${one.label}`,
+                      title: 'Forget — remove it from the log',
+                      run: () => void after(api.act({ do: 'forget', keys: [{ module: one.module, id: one.id }], scope: where }), 'done'),
+                    }}
+                  />
+                ))
+              )}
+              {log?.more ? (
+                <li className="px-1.5 py-0.5">
+                  <button type="button" className="text-muted-foreground hover:text-foreground text-[11px] underline underline-offset-2" onClick={loadMore}>
+                    {more ? 'Reading…' : `show ${Math.min(PAGE, log.total - log.rows.length)} more`}
+                  </button>
+                </li>
+              ) : null}
+            </ul>
+            {log && log.total > 0 ? (
+              <div className="px-2 py-1">
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-foreground text-[11px]"
+                  title="Remove from the log what is shown here — what is open is not touched"
+                  onClick={() => void after(api.act({ do: 'forget', scope: where }), 'done')}
+                >
+                  Forget what is shown
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
+  )
+}
+
+/** The page's own height, as the person resizes the container. Null until measured. */
+function useHeight(element: React.RefObject<HTMLElement | null>): number | null {
+  const [height, setHeight] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const at = element.current
+    if (!at || typeof ResizeObserver === 'undefined') return
+    const watch = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect
+      if (!rect || (rect.width === 0 && rect.height === 0)) return
+      setHeight(Math.round(rect.height))
+    })
+    watch.observe(at)
+    return () => watch.disconnect()
+  }, [element])
+  return height
 }
