@@ -238,7 +238,7 @@ export function Screen({
   }, [ready, drawn])
 
   return (
-    <div ref={root} className="flex h-screen min-w-0 flex-col text-sm" data-small={small ? '' : undefined}>
+    <div data-kehikot-page ref={root} className="flex h-screen min-w-0 flex-col text-sm" data-small={small ? '' : undefined}>
       {cover ? (
         <Cover state={cover} name="Inbox" onRetry={reread} />
       ) : tooOld ? (
