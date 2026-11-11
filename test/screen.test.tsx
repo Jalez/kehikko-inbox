@@ -41,7 +41,7 @@ function fakeHost(answers: Record<string, (params: Record<string, unknown>) => u
 
 const done = () => ({ outcome: 'done', changed: 1, why: '' })
 
-function show(read: InboxReadResult, extra: Record<string, (params: Record<string, unknown>) => unknown> = {}, props: { filter?: Filter; signal?: Signal | null; box?: { height: number }; presses?: Presses; host?: Partial<Host> } = {}) {
+function show(read: InboxReadResult, extra: Record<string, (params: Record<string, unknown>) => unknown> = {}, props: { filter?: Filter; signal?: Signal | null; box?: { height: number }; presses?: Presses; host?: Partial<Host>; onFilter?: (filter: Filter) => void } = {}) {
   const fake = fakeHost(
     {
       'inbox.read': () => read,
@@ -55,7 +55,7 @@ function show(read: InboxReadResult, extra: Record<string, (params: Record<strin
     props.host,
   )
   const view = (signal: Signal | null = props.signal ?? null, api: InboxApi = fake.api) => (
-    <Screen host={fake.host} api={api} filter={props.filter ?? DEFAULT_FILTER} signal={signal} box={props.box ?? { height: 600 }} presses={props.presses} now={() => 120_000} />
+    <Screen host={fake.host} api={api} filter={props.filter ?? DEFAULT_FILTER} onFilter={props.onFilter} signal={signal} box={props.box ?? { height: 600 }} presses={props.presses} now={() => 120_000} />
   )
   const rendered = render(view())
   return { ...fake, rendered, rerender: (signal: Signal | null) => rendered.rerender(view(signal)) }
@@ -290,5 +290,54 @@ describe('the header', () => {
       ['show', 'needs'],
       ['where', 'here'],
     ])
+  })
+})
+
+describe('an empty Inbox', () => {
+  const empty = () => document.querySelector('[data-slot="empty"]') as HTMLElement | null
+  const seen = async () => {
+    await waitFor(() => {
+      if (!empty()) throw new Error('not yet')
+    })
+    return empty() as HTMLElement
+  }
+
+  test('with everything shown: the icon, a title and a line, and no button', async () => {
+    show(readOf())
+    const shown = await seen()
+    expect(shown.querySelector('[data-slot="empty-icon"] svg')).not.toBeNull()
+    expect(shown.querySelector('[data-slot="empty-title"]')?.textContent).toBe('Nothing needs you')
+    expect(shown.querySelector('[data-slot="empty-description"]')?.textContent).toBe('Nothing here right now.')
+    expect(within(shown).queryByRole('button')).toBeNull()
+  })
+
+  test('because of the filter: says so, and a button shows everything', async () => {
+    const onFilter = mock((_: Filter) => {})
+    show(readOf({ items: [item({ id: 'w', state: 'working' })] }), {}, { filter: { show: 'needs', where: 'everywhere' }, onFilter })
+    const shown = await seen()
+    expect(shown.querySelector('[data-slot="empty-description"]')?.textContent).toContain('Only what needs you is shown')
+    fireEvent.click(within(shown).getByRole('button', { name: 'Show everything' }))
+    expect(onFilter).toHaveBeenCalledWith({ show: 'all', where: 'everywhere' })
+  })
+
+  test('because of the scope: names Where, and offers Everywhere', async () => {
+    const onFilter = mock((_: Filter) => {})
+    show(readOf({ items: [item({ id: 'o', here: false })] }), {}, { filter: { show: 'all', where: 'here' }, onFilter })
+    const shown = await seen()
+    expect(shown.querySelector('[data-slot="empty-description"]')?.textContent).toContain('Switch Where to Everywhere')
+    expect(within(shown).queryByRole('button', { name: 'Show everything' })).toBeNull()
+    fireEvent.click(within(shown).getByRole('button', { name: 'Show everywhere' }))
+    expect(onFilter).toHaveBeenCalledWith({ show: 'all', where: 'everywhere' })
+  })
+
+  test('a small container: just "Nothing needs you" in the line', async () => {
+    show(readOf(), {}, { box: { height: 56 } })
+    const line = await waitFor(() => {
+      const found = document.querySelector('[data-small-line]')
+      if (!found) throw new Error('not yet')
+      return found as HTMLElement
+    })
+    expect(line.textContent).toBe('Nothing needs you')
+    expect(empty()).toBeNull()
   })
 })
