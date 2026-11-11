@@ -1,10 +1,11 @@
-import { BellOff, ChevronDown, ChevronRight } from 'lucide-react'
+import { BellOff, ChevronDown, ChevronRight, Inbox as InboxIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 
 import type { InboxItem, InboxKey, InboxLogResult, InboxReadResult, PressValue } from 'kehikot-module-protocol'
 import { Cover, coverFor, useServerStanding } from 'kehikot-module-protocol/client/react'
 import { Button, Collapsible, CollapsibleContent, CollapsibleTrigger, cn } from 'kehikot-module-protocol/client/ui'
 
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { ATTENTION, Dot, Question, Ring, Row, SectionHeading, type Answered, type Said } from '@/components/parts'
 import { footerItems } from '@/footer'
 import { headerItems, pressHeader } from '@/header'
@@ -17,7 +18,9 @@ import {
   STOP_TITLE,
   ageWords,
   arrange,
+  emptyWords,
   findItem,
+  isNothing,
   fold,
   keyOf,
   mutedWords,
@@ -446,24 +449,38 @@ function List({
       return out
     })
 
-  const nothing = arranged.needs.length + arranged.working.length + arranged.finished.length + arranged.project.length === 0
+  const nothing = isNothing(arranged)
   const muted = read.muted
+  /* "Needs you only" is what emptied it: the same Inbox, shown whole, would have rows. */
+  const hiddenByFilter = nothing && filter.show === 'needs' && !isNothing(arrange(read, { ...filter, show: 'all' }))
   const moreElsewhere = filter.where === 'here' && read.items.some((one) => !one.here && !one.project && (filter.show === 'all' || one.state === 'attention'))
 
   return (
     <>
       {nothing ? (
-        <div className="px-2 py-2 text-xs" data-empty="">
-          <p>{filter.where === 'here' ? 'Nothing here on this kehikko.' : NOTHING_NEEDS_YOU}</p>
-          {moreElsewhere ? (
-            <p className="text-muted-foreground mt-0.5">
-              There is more on other kehikot.{' '}
-              <button type="button" className="text-foreground underline underline-offset-2" onClick={() => onFilter({ ...filter, where: 'everywhere' })}>
-                Show everywhere
-              </button>
-            </p>
+        <Empty data-empty="" className="py-6 md:p-6">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <InboxIcon aria-hidden />
+            </EmptyMedia>
+            <EmptyTitle className="text-base">Nothing needs you</EmptyTitle>
+            <EmptyDescription>{emptyWords({ filter, hiddenByFilter, moreElsewhere })}</EmptyDescription>
+          </EmptyHeader>
+          {hiddenByFilter || moreElsewhere ? (
+            <EmptyContent className="flex-row justify-center">
+              {hiddenByFilter ? (
+                <Button size="sm" variant="outline" onClick={() => onFilter({ ...filter, show: 'all' })}>
+                  Show everything
+                </Button>
+              ) : null}
+              {moreElsewhere ? (
+                <Button size="sm" variant="outline" onClick={() => onFilter({ ...filter, where: 'everywhere' })}>
+                  Show everywhere
+                </Button>
+              ) : null}
+            </EmptyContent>
           ) : null}
-        </div>
+        </Empty>
       ) : null}
 
       {arranged.needs.length ? (

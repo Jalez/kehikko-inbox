@@ -189,6 +189,17 @@ export const OLD_HOST =
 /** What a `next` with nothing to go to says. */
 export const NOTHING_NEEDS_YOU = 'Nothing needs you.'
 
+/** Nothing to list: no section but Earlier has a row. */
+export const isNothing = (arranged: Arranged): boolean =>
+  arranged.needs.length + arranged.working.length + arranged.finished.length + arranged.project.length + arranged.elsewhere.length === 0
+
+/** The line under "Nothing needs you": why the list is empty, by the filter and the scope. */
+export function emptyWords({ filter, hiddenByFilter, moreElsewhere }: { filter: Filter; hiddenByFilter: boolean; moreElsewhere: boolean }): string {
+  if (hiddenByFilter) return 'Only what needs you is shown. Other things are going on.'
+  if (moreElsewhere) return 'Nothing on this kehikko. Switch Where to Everywhere to see the others.'
+  return filter.where === 'here' ? 'Nothing on this kehikko right now.' : 'Nothing here right now.'
+}
+
 /* ---- counts, for the footer and a small container ---- */
 
 export interface Tally {
