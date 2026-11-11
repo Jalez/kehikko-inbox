@@ -1,66 +1,9 @@
 #!/usr/bin/env bash
 #
-# The one name every module ships this under, so a host that offers to start one
-# has a script to run rather than a command line to build.
-#
-#   - No arguments. A registration names a directory and one script inside it,
-#     never a command line: a string a host handed to a shell would make a
-#     registration file a place to write shell.
-#   - No port on the `vite` line, and no `--strictPort`. Both used to be there,
-#     with 7910 written here and again in `register.ts` — 7820 through 7960
-#     belong to the other modules on this machine — so moving this one meant two
-#     edits and then remembering that the file in `~/Library/Application Support/Kehikot/modules` still
-#     named the old address. It is said once now, beside the id, as
-#     `PREFERRED_PORT` in `manifest.ts`.
-#
-#     $PORT is still honoured, by `serves()` in `vite.config.ts` rather than by
-#     this line, and for the reason this bullet always gave: whoever starts this
-#     chose the port, and an app that picked its own would answer somewhere
-#     nobody is looking. A host passes the port from the registration when it
-#     spawns this script, which is the address it is about to go and read.
-#
-#     What `--strictPort` bought was an app that DIED on a taken port rather than
-#     one answering quietly somewhere else, and that was the only honest option
-#     while nothing handled a collision. `serves()` handles it: a free 7910 is
-#     taken in silence, this module already answering there ends the start
-#     cleanly instead of making a second copy, and anything else is a loud move
-#     with the registration rewritten to the port actually bound.
-#   - `exec`, and the foreground. A script that forks and returns leaves whoever
-#     started it holding a pid that stops nothing, and Stop is only ever offered
-#     for what a host started.
-#   - `cd` to this script's own directory, so the program runs from where it
-#     lives however it was invoked. (The store is not here: it is inside each
-#     project, at `.kehikot/notifications/`.)
-#
-# It does NOT register a module that had none. Registration is a deliberate act
-# by a person — see `register.ts` — and a start script that quietly wrote into
-# somebody's home directory would be doing it on their behalf. That argument is
-# untouched. What the Vite plugin now writes on every start is this module's
-# ADDRESS, which is a different sentence: the person decided to be framed, they
-# did not decide to be framed at 7910 in particular, and a registration still
-# naming a port this app has drifted off is one the host sweeps to find nothing.
-#
-# ## The built page, when it is this checkout's, and Vite otherwise
-#
-# There is a build: `bun run build` compiles the page into `dist/` and stamps it
-# with the commit (`dist/.kehikot-built`), and `serve.ts` serves it on the same
-# doors and the same port, with a fraction of the memory a Vite dev server holds.
-# A host builds an installed copy when it installs or updates it, at the tag; a
-# start never builds, because a start that builds is a start that fails when the
-# network is down.
-#
-# The old objection to a `dist` here was the right one: a STALE page served with
-# a 200 has every symptom of a working app and none of the changes, and that has
-# cost this codebase whole afternoons. So the built page is served only when its
-# stamp is the commit checked out here, which is checked at the bottom of this
-# file before anything is started. A checkout somebody edits has no stamp, or one
-# of an older commit, and gets Vite as it always did; a build of an edited tree is
-# never stamped. `serve.ts` refuses a stale build itself too (a 503 that says
-# why), so even `bun run start` by hand cannot serve one.
-#
-# On the Vite path the manifest, the health check, the MCP door and this app's
-# own store are middleware in front of the same server — see `doors()` in
-# `vite.config.ts` — because a module is one origin or it is nothing.
+# What a host runs to start this module: no arguments, foreground, `exec`. No port here: it is
+# PREFERRED_PORT in manifest.ts, and `serves()` / `run()` act on it and honour $PORT from a host.
+# The built page (`bun run build`, which a host runs at install and update) when its stamp is this
+# checkout's commit; Vite otherwise. A stale build is never served.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -98,7 +41,7 @@ if [ -n "$BUILT" ] && [ "$BUILT" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
   exec bun run serve.ts
 fi
 if [ -n "$BUILT" ]; then
-  echo "notifications: dist/ is a build of ${BUILT:0:7}, not of this checkout, so Vite serves the page. \`bun run build\` would make it current." >&2
+  echo "inbox: dist/ is a build of ${BUILT:0:7}, not of this checkout, so Vite serves the page. \`bun run build\` would make it current." >&2
 fi
 
 exec bunx vite $VITE_FORCE

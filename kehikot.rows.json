@@ -1,0 +1,249 @@
+[
+  {
+    "name": "reading the Inbox",
+    "state": true,
+    "header": [
+      {
+        "kind": "switch",
+        "id": "show",
+        "label": "Show",
+        "agents": true,
+        "options": [
+          {
+            "id": "all",
+            "label": "Everything"
+          },
+          {
+            "id": "needs",
+            "label": "Needs you only"
+          }
+        ],
+        "value": "all"
+      },
+      {
+        "kind": "switch",
+        "id": "where",
+        "label": "Where",
+        "agents": true,
+        "options": [
+          {
+            "id": "everywhere",
+            "label": "Everywhere"
+          },
+          {
+            "id": "here",
+            "label": "This kehikko"
+          }
+        ],
+        "value": "everywhere"
+      }
+    ],
+    "footer": [
+      {
+        "kind": "text",
+        "id": "count",
+        "text": "Reading your Inbox…",
+        "level": "normal",
+        "align": "start",
+        "optional": false
+      }
+    ]
+  },
+  {
+    "name": "nothing needs you",
+    "state": true,
+    "header": [
+      {
+        "kind": "switch",
+        "id": "show",
+        "label": "Show",
+        "agents": true,
+        "options": [
+          {
+            "id": "all",
+            "label": "Everything"
+          },
+          {
+            "id": "needs",
+            "label": "Needs you only"
+          }
+        ],
+        "value": "all"
+      },
+      {
+        "kind": "switch",
+        "id": "where",
+        "label": "Where",
+        "agents": true,
+        "options": [
+          {
+            "id": "everywhere",
+            "label": "Everywhere"
+          },
+          {
+            "id": "here",
+            "label": "This kehikko"
+          }
+        ],
+        "value": "everywhere"
+      }
+    ],
+    "footer": [
+      {
+        "kind": "text",
+        "id": "count",
+        "text": "Nothing needs you · 1 working · 2 finished",
+        "level": "normal",
+        "align": "start",
+        "optional": false,
+        "tooltip": "Nothing needs you · 1 working · 2 finished."
+      },
+      {
+        "kind": "run",
+        "id": "next",
+        "label": "Next",
+        "agents": false,
+        "state": "idle",
+        "result": null,
+        "disabled": "Nothing needs you.",
+        "confirm": false,
+        "align": "end",
+        "optional": false,
+        "tooltip": "Go to the next thing that needs you (Alt+Shift+N)",
+        "actsOn": "count"
+      }
+    ]
+  },
+  {
+    "name": "two need you, one in another project",
+    "state": true,
+    "header": [
+      {
+        "kind": "switch",
+        "id": "show",
+        "label": "Show",
+        "agents": true,
+        "options": [
+          {
+            "id": "all",
+            "label": "Everything"
+          },
+          {
+            "id": "needs",
+            "label": "Needs you only"
+          }
+        ],
+        "value": "needs"
+      },
+      {
+        "kind": "switch",
+        "id": "where",
+        "label": "Where",
+        "agents": true,
+        "options": [
+          {
+            "id": "everywhere",
+            "label": "Everywhere"
+          },
+          {
+            "id": "here",
+            "label": "This kehikko"
+          }
+        ],
+        "value": "here"
+      }
+    ],
+    "footer": [
+      {
+        "kind": "text",
+        "id": "count",
+        "text": "2 need you · 1 working · 1 in other project",
+        "level": "warn",
+        "align": "start",
+        "optional": false,
+        "tooltip": "2 need you · 1 working · 1 in other project."
+      },
+      {
+        "kind": "run",
+        "id": "next",
+        "label": "Next",
+        "agents": false,
+        "state": "idle",
+        "result": null,
+        "disabled": null,
+        "confirm": false,
+        "align": "end",
+        "optional": false,
+        "tooltip": "Go to the next thing that needs you (Alt+Shift+N)",
+        "actsOn": "count"
+      }
+    ]
+  },
+  {
+    "name": "the Inbox could not be read",
+    "state": true,
+    "header": [
+      {
+        "kind": "switch",
+        "id": "show",
+        "label": "Show",
+        "agents": true,
+        "options": [
+          {
+            "id": "all",
+            "label": "Everything"
+          },
+          {
+            "id": "needs",
+            "label": "Needs you only"
+          }
+        ],
+        "value": "all"
+      },
+      {
+        "kind": "switch",
+        "id": "where",
+        "label": "Where",
+        "agents": true,
+        "options": [
+          {
+            "id": "everywhere",
+            "label": "Everywhere"
+          },
+          {
+            "id": "here",
+            "label": "This kehikko"
+          }
+        ],
+        "value": "everywhere"
+      }
+    ],
+    "footer": [
+      {
+        "kind": "text",
+        "id": "trouble",
+        "text": "The host was asked inbox.read and had not answered 12 seconds later.",
+        "level": "critical",
+        "align": "start",
+        "optional": false,
+        "tooltip": "The host was asked inbox.read and had not answered 12 seconds later."
+      }
+    ]
+  },
+  {
+    "name": "a host that does not answer the Inbox",
+    "state": true,
+    "header": [],
+    "footer": [
+      {
+        "kind": "text",
+        "id": "count",
+        "text": "Your Inbox is in Kehikot’s bar",
+        "level": "normal",
+        "align": "start",
+        "optional": false,
+        "tooltip": "This version of Kehikot keeps your Inbox in its own bar. Once Kehikot is updated, your Inbox shows here."
+      }
+    ]
+  }
+]

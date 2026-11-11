@@ -1,11 +1,7 @@
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
-/**
- * A document, for the tests that render one.
- *
- * Registered globally rather than per-file because half the value of these tests
- * is that they run the real components — the words on screen are the thing being
- * asserted, and a fake renderer would let a component say something different
- * from what it says in a browser.
- */
+/* A document for the tests that render one; the pure tests do not care. Bun's own fetch, Request,
+   Response and Headers are kept: the door tests use them. */
+const own = { fetch: globalThis.fetch, Request: globalThis.Request, Response: globalThis.Response, Headers: globalThis.Headers }
 GlobalRegistrator.register()
+Object.assign(globalThis, own)

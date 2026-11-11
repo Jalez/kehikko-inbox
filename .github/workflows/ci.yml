@@ -1,0 +1,26 @@
+# Check every pull request and every push to main: the shared module checks (the version matches
+# the kind its notes declare, install, typecheck, test, build), and the header and footer this
+# module states in kehikot.rows.json held to the protocol's rule.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: Jalez/kehikko-desktop/.github/workflows/module-ci.yml@main
+
+  rows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run check:rows

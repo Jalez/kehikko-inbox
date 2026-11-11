@@ -1,8 +1,4 @@
-# A DOM for every test file, registered once.
-#
-# The rendering tests need one and the pure ones do not care, and a preload is
-# cheaper to reason about than two suites with different globals — the failure
-# where a component test runs without a document is a stack trace nobody reads as
-# "wrong config".
+# A DOM for every test file, registered once, so a component test never runs
+# without a document.
 [test]
 preload = ["./test/setup.ts"]
