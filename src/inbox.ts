@@ -1,4 +1,4 @@
-import { INBOX_GO_LABEL, type InboxItem, type InboxKey, type InboxReadResult } from 'kehikot-module-protocol'
+import { INBOX_GO_LABEL, type InboxAdoptionResult, type InboxItem, type InboxKey, type InboxReadResult } from 'kehikot-module-protocol'
 
 /**
  * The Inbox's rules, pure: which item goes in which section and in what order, what a row says,
@@ -275,3 +275,43 @@ export function topOf(read: Pick<InboxReadResult, 'items' | 'elsewhere' | 'next'
 
 /** A container this short or shorter, in CSS pixels, shows only the count and the top item. */
 export const SMALL_BELOW = 96
+
+/* ---- adopting an item no epic names (protocol 2.88.0) ---- */
+
+/** One press an adoptable item offers. */
+export type AdoptPress =
+  | { kind: 'add'; label: string; epic: string; parts: string[] }
+  | { kind: 'with'; label: string }
+  | { kind: 'pick'; label: string }
+
+/** What an adoptable item offers, from the host's `inbox.adoption`, before it is read and after. */
+export interface AdoptOffer {
+  /** The main press. */
+  primary: AdoptPress
+  /** The other way, when there is one. */
+  secondary: AdoptPress | null
+}
+
+/** How many adoptable items the page asks the host about at once, so a sure suggestion is one press. */
+export const ADOPT_READ_FIRST = 3
+
+export const UNTRACK_WORDS = "Don't track this"
+export const UNDO_WORDS = 'Undo'
+
+/**
+ * What an adoptable item offers:
+ * - an unambiguous suggestion: "Add to <epic>" in one press, and "Adopt with <agent>…" or "Another epic…";
+ * - otherwise, with the person's agent for Kehikot's own tasks: "Adopt with <agent>…", and "Choose an epic…";
+ * - otherwise: "Add to an epic…", the picker.
+ * Before the host has said (`adoption` null): the picker alone. Never adopts by itself.
+ */
+export function adoptOffer(adoption: Pick<InboxAdoptionResult, 'suggested' | 'agent' | 'epics'> | null): AdoptOffer {
+  const pick: AdoptPress = { kind: 'pick', label: 'Add to an epic…' }
+  if (!adoption) return { primary: pick, secondary: null }
+  const sure = adoption.suggested?.sure ? adoption.suggested : null
+  const title = sure ? (adoption.epics.find((one) => one.epic === sure.epic)?.title ?? sure.epic) : null
+  const withAgent: AdoptPress | null = adoption.agent ? { kind: 'with', label: `Adopt with ${adoption.agent.name}…` } : null
+  if (sure && title) return { primary: { kind: 'add', label: `Add to ${title}`, epic: sure.epic, parts: [...sure.parts] }, secondary: withAgent ?? { kind: 'pick', label: 'Another epic…' } }
+  if (withAgent) return { primary: withAgent, secondary: { kind: 'pick', label: 'Choose an epic…' } }
+  return { primary: pick, secondary: null }
+}

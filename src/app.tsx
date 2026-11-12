@@ -1,15 +1,17 @@
 import { BellOff, ChevronDown, ChevronRight, Inbox as InboxIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 
-import type { InboxItem, InboxKey, InboxLogResult, InboxReadResult, PressValue } from 'kehikot-module-protocol'
+import type { InboxAdoptionResult, InboxItem, InboxKey, InboxLogResult, InboxReadResult, PressValue } from 'kehikot-module-protocol'
 import { Cover, coverFor, useServerStanding } from 'kehikot-module-protocol/client/react'
 import { Button, Collapsible, CollapsibleContent, CollapsibleTrigger, cn } from 'kehikot-module-protocol/client/ui'
 
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { ATTENTION, Dot, Question, Ring, Row, SectionHeading, type Answered, type Said } from '@/components/parts'
+import { ATTENTION, AdoptBar, Dot, Question, Ring, Row, SectionHeading, type Answered, type Said } from '@/components/parts'
 import { footerItems } from '@/footer'
 import { headerItems, pressHeader } from '@/header'
 import {
+  ADOPT_READ_FIRST,
+  UNDO_WORDS,
   DEFAULT_FILTER,
   NOTHING_NEEDS_YOU,
   OLD_HOST,
@@ -385,6 +387,23 @@ function List({
 }) {
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set())
   const [mutedOpen, setMutedOpen] = useState(false)
+  /* Adopting an item no epic names (protocol 2.88.0): what the host offers for each, read once per record. */
+  const [adoptions, setAdoptions] = useState<ReadonlyMap<string, InboxAdoptionResult>>(new Map())
+  const [untracked, setUntracked] = useState<{ key: InboxKey; project?: number; label: string } | null>(null)
+  const readAdoption = useCallback(
+    (item: InboxItem, project?: number) => {
+      const key = keyOf(item, project)
+      api.adoption({ module: item.module, id: item.id }, project).then(
+        (got) => got.outcome === 'ok' && setAdoptions((was) => new Map(was).set(key, got)),
+        () => undefined,
+      )
+    },
+    [api],
+  )
+  useEffect(() => {
+    /* The first few, so an unambiguous suggestion is one press; the rest when their picker opens. */
+    for (const item of read.items.filter((one) => one.adoptable).slice(0, ADOPT_READ_FIRST)) if (!adoptions.has(keyOf(item))) readAdoption(item)
+  }, [read.rev])
   /* Ages tick. */
   const [now, setNow] = useState(clock)
   useEffect(() => {
@@ -426,6 +445,26 @@ function List({
           : {})}
       >
         {item.question ? <Question question={item.question} onAnswer={(said) => answer(item, said, project?.id)} /> : null}
+        {item.adoptable || item.after?.said ? (
+          <AdoptBar
+            item={item}
+            adoption={adoptions.get(key) ?? null}
+            onRead={() => readAdoption(item, project?.id)}
+            onAdopt={(epic, parts) => void after(api.adopt({ module: item.module, id: item.id }, epic, parts, project?.id), 'adopted')}
+            onWith={() =>
+              void api.adoptWith({ module: item.module, id: item.id }, project?.id).then(
+                (got) => setSaid(got.outcome === 'opened' ? null : got.why || 'Kehikot did not open it.'),
+                (error: unknown) => setSaid(sentence(error)),
+              )
+            }
+            onUntrack={() =>
+              void after(api.untrack({ module: item.module, id: item.id }, project?.id), 'done').then(() =>
+                setUntracked({ key: { module: item.module, id: item.id }, ...(project ? { project: project.id } : {}), label: item.label }),
+              )
+            }
+            onUndo={() => void after(api.undo({ module: item.module, id: item.id }, project?.id), 'done')}
+          />
+        ) : null}
       </Row>
     )
   }
@@ -480,6 +519,20 @@ function List({
 
   return (
     <>
+      {untracked ? (
+        <div className="text-muted-foreground flex items-center gap-1.5 px-2 py-1 text-[11px]" data-untracked="" role="status">
+          <span className="min-w-0 truncate">Not tracked: {untracked.label}</span>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 text-[11px]"
+            onClick={() => void after(api.undo(untracked.key, untracked.project), 'done').then(() => setUntracked(null))}
+            data-undo-untrack=""
+          >
+            {UNDO_WORDS}
+          </Button>
+        </div>
+      ) : null}
       {nothing ? (
         <Empty data-empty="" className="py-6 md:p-6">
           <EmptyHeader>
