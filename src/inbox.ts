@@ -1,4 +1,4 @@
-import type { InboxItem, InboxKey, InboxReadResult } from 'kehikot-module-protocol'
+import { INBOX_GO_LABEL, type InboxItem, type InboxKey, type InboxReadResult } from 'kehikot-module-protocol'
 
 /**
  * The Inbox's rules, pure: which item goes in which section and in what order, what a row says,
@@ -35,7 +35,14 @@ export const STATE_WORDS: Record<InboxItem['state'], string> = {
 }
 
 /** What a row says after its by-line: the declared event's words, else the state's. */
-export const stateSaid = (item: Pick<InboxItem, 'state' | 'says'>): string => item.says || STATE_WORDS[item.state]
+/** What an offer to take the person somewhere says in place of its state (an item with `go`). */
+export const OFFER_SAID = 'offers to show you'
+
+export const stateSaid = (item: Pick<InboxItem, 'state' | 'says'> & { go?: InboxItem['go'] }): string =>
+  item.go ? OFFER_SAID : item.says || STATE_WORDS[item.state]
+
+/** The words on an item's go button: the host's `label`, else "Take me there". Text only. */
+export const goWords = (item: Pick<InboxItem, 'go'>): string | null => (item.go ? item.go.label || INBOX_GO_LABEL : null)
 
 const PRIORITY_RANK: Record<InboxItem['priority'], number> = { urgent: 0, normal: 1, low: 2 }
 
@@ -134,12 +141,13 @@ export interface Folded {
  * module with `FOLD_FROM` rows or more there is drawn as one row that opens to them.
  */
 export function fold(list: readonly InboxItem[], project?: number): Folded[] {
+  /* An offer to take the person somewhere is its own row, never folded: its button is the point. */
   const count = new Map<string, number>()
-  for (const item of list) count.set(item.module, (count.get(item.module) ?? 0) + 1)
+  for (const item of list) if (!item.go) count.set(item.module, (count.get(item.module) ?? 0) + 1)
   const rows: Folded[] = []
   const at = new Map<string, Folded>()
   for (const item of list) {
-    if ((count.get(item.module) ?? 0) < FOLD_FROM) {
+    if (item.go || (count.get(item.module) ?? 0) < FOLD_FROM) {
       rows.push({ head: item, members: [item], key: keyOf(item, project) })
       continue
     }
@@ -176,6 +184,12 @@ export function placeSaid(item: Pick<InboxItem, 'where'>, project?: { name: stri
   if (!project) return item.where
   if (!item.where || item.where === project.name) return project.name
   return `${project.name} · ${item.where}`
+}
+
+/** The go button's tooltip: where it takes the person, and that Go back returns them. */
+export function goTitle(item: Pick<InboxItem, 'where' | 'go'>, project?: { name: string }): string {
+  const where = placeSaid(item, project)
+  return `${goWords(item) ?? INBOX_GO_LABEL}${where ? ` — ${where}` : ''}. Go back on the kehikko returns you.`
 }
 
 export const mutedWords = (count: number): string => `${count} ${count === 1 ? 'module' : 'modules'} muted`
