@@ -341,3 +341,54 @@ describe('an empty Inbox', () => {
     expect(empty()).toBeNull()
   })
 })
+
+describe('an offer to take the person somewhere (go)', () => {
+  const offer = (over: Partial<Parameters<typeof item>[0]> = {}) =>
+    item({ id: 'offer:1', module: 'kehikot.codex', by: 'Codex', state: 'done', label: 'The failing test is in the auth epic, part 3', go: {}, ...over })
+
+  test('a primary Take me there beside dismiss; pressing it is inbox.open', async () => {
+    const { asked } = show(readOf({ items: [offer()] }))
+    const go = await screen.findByRole('button', { name: 'Take me there' })
+    expect(go.getAttribute('data-go')).toBe('')
+    expect(screen.getByRole('button', { name: 'dismiss The failing test is in the auth epic, part 3' })).toBeTruthy()
+    expect(document.querySelector('[data-byline]')?.textContent).toBe('Codex · , offers to show you')
+    fireEvent.click(go)
+    await waitFor(() => expect(acts(asked)).toEqual([{ method: 'inbox.open', params: { module: 'kehikot.codex', id: 'offer:1' } }]))
+  })
+
+  test('the host’s label, as text', async () => {
+    show(readOf({ items: [offer({ go: { label: '<b>Show me</b>' } })] }))
+    expect(await screen.findByRole('button', { name: '<b>Show me</b>' })).toBeTruthy()
+    expect(document.querySelector('b')).toBeNull()
+  })
+
+  test('dismiss works as for any item', async () => {
+    const { asked } = show(readOf({ items: [offer()] }))
+    fireEvent.click(await screen.findByRole('button', { name: 'dismiss The failing test is in the auth epic, part 3' }))
+    await waitFor(() => expect(acts(asked)).toEqual([{ method: 'inbox.act', params: { do: 'dismiss', keys: [{ module: 'kehikot.codex', id: 'offer:1' }] } }]))
+  })
+
+  test('an ordinary item has no Take me there', async () => {
+    show(readOf({ items: [item({ id: 'a', label: 'ask' })] }))
+    await screen.findByText('ask')
+    expect(document.querySelector('[data-go]')).toBeNull()
+  })
+
+  test('another project’s offer goes there with its project', async () => {
+    const { asked } = show(readOf({ elsewhere: [{ project: { id: 7, name: 'Other' }, items: [offer()] }] }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Take me there' }))
+    await waitFor(() => expect(acts(asked)).toEqual([{ method: 'inbox.open', params: { module: 'kehikot.codex', id: 'offer:1', project: 7 } }]))
+  })
+
+  test('the one-line container shows it as the press action', async () => {
+    const { asked } = show(readOf({ items: [offer()] }), {}, { box: { height: 56 } })
+    const line = await waitFor(() => {
+      const found = document.querySelector('[data-small-line]')
+      if (!found) throw new Error('not yet')
+      return found as HTMLElement
+    })
+    expect(line.textContent).toContain('Codex · offers to show you')
+    fireEvent.click(within(line).getByRole('button', { name: 'Take me there' }))
+    await waitFor(() => expect(acts(asked)).toEqual([{ method: 'inbox.open', params: { module: 'kehikot.codex', id: 'offer:1' } }]))
+  })
+})

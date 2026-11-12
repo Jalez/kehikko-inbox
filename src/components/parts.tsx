@@ -69,11 +69,13 @@ export interface RowProps {
   pressTitle?: string
   action?: { label: string; title: string; run(): void }
   mute?: { label: string; title: string; run(): void }
+  /** An item whose primary action is to go to its place (an agent's offer): a primary button beside dismiss. */
+  go?: { label: string; title: string; run(): void }
   children?: React.ReactNode
 }
 
 /** One row: WHO says it before what, the label, the place and the age; pressing it goes there. */
-export function Row({ rowKey, dot, by, state, label, detail, place, age, urgent, count, expanded, highlighted, dim, onPress, pressTitle, action, mute, children }: RowProps) {
+export function Row({ rowKey, dot, by, state, label, detail, place, age, urgent, count, expanded, highlighted, dim, onPress, pressTitle, action, mute, go, children }: RowProps) {
   const body = (
     <>
       <span className="flex min-w-0 items-center gap-1.5 text-[11px]">
@@ -137,6 +139,18 @@ export function Row({ rowKey, dot, by, state, label, detail, place, age, urgent,
           className="text-muted-foreground mt-0.5 size-5 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
         >
           <BellOff className="size-3" />
+        </Button>
+      ) : null}
+      {go ? (
+        <Button
+          type="button"
+          size="sm"
+          onClick={go.run}
+          title={go.title}
+          data-go=""
+          className="mt-0.5 h-6 max-w-40 shrink-0 truncate px-2 text-[11px]"
+        >
+          {go.label}
         </Button>
       ) : null}
       {action ? (

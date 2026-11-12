@@ -1,6 +1,6 @@
 {
   "name": "kehikko-inbox",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "description": "Inbox, a module a Kehikot host frames: what the modules on this computer need from you, are doing and have said, read from the host's one record and acted on for you — answered, dismissed, gone to.",
@@ -21,7 +21,7 @@
     "@radix-ui/react-tooltip": "^1.2.16",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "kehikot-module-protocol": "git+https://github.com/Jalez/kehikko-protocol.git#v2.82.0",
+    "kehikot-module-protocol": "git+https://github.com/Jalez/kehikko-protocol.git#v2.87.0",
     "lucide-react": "^1.33.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

@@ -143,3 +143,20 @@ describe('what a small container shows, and what Next names', () => {
     expect(topOf(readOf(), arrange(readOf(), { show: 'all', where: 'everywhere' }))).toBeNull()
   })
 })
+
+describe('an offer (go)', () => {
+  test('its words: the host’s label, else Take me there; its state is said as an offer', async () => {
+    const { goWords, stateSaid, fold } = await import('../src/inbox.ts')
+    const { item } = await import('./fixtures.ts')
+    const offer = item({ id: 'offer:1', state: 'done', go: {} })
+    expect(goWords(offer)).toBe('Take me there')
+    expect(goWords(item({ id: 'o2', go: { label: 'Show me' } }))).toBe('Show me')
+    expect(goWords(item({ id: 'plain' }))).toBeNull()
+    expect(stateSaid(offer)).toBe('offers to show you')
+    /* Never folded with the module's other rows: its button is the point. */
+    const many = [1, 2, 3, 4, 5].map((n) => item({ id: `d${n}`, state: 'done' }))
+    const rows = fold([...many, offer])
+    expect(rows.find((one) => one.head.id === 'offer:1')?.members).toHaveLength(1)
+    expect(rows.find((one) => one.head.id !== 'offer:1')?.members.length).toBe(5)
+  })
+})

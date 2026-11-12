@@ -24,6 +24,8 @@ import {
   fold,
   keyOf,
   mutedWords,
+  goTitle,
+  goWords,
   placeSaid,
   stateSaid,
   stopWords,
@@ -318,7 +320,27 @@ function Small({
       <span className={cn('shrink-0 tabular-nums', tally.needs ? ATTENTION : 'text-muted-foreground')} data-small-count="">
         {tallySaid(tally)}
       </span>
-      {top ? (
+      {top && top.item.go ? (
+        <span className="flex min-w-0 flex-1 items-center gap-1.5" data-key={key} data-highlighted={highlight === key ? '' : undefined}>
+          <Dot state={top.item.state} />
+          <span className="text-muted-foreground shrink-0">
+            {top.item.by} · {stateSaid(top.item)}
+          </span>
+          <span className="min-w-0 flex-1 truncate" title={top.item.label}>
+            {top.item.label}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            data-go=""
+            title={goTitle(top.item, top.project)}
+            className="h-5 max-w-32 shrink-0 truncate px-1.5 text-[11px]"
+            onClick={() => onOpen(top.item, top.project?.id)}
+          >
+            {goWords(top.item)}
+          </Button>
+        </span>
+      ) : top ? (
         <button
           type="button"
           data-key={key}
@@ -397,6 +419,7 @@ function List({
         urgent={item.priority === 'urgent'}
         highlighted={highlight === key}
         onPress={() => onOpen(item, project?.id)}
+        {...(item.go ? { go: { label: goWords(item)!, title: goTitle(item, project), run: () => onOpen(item, project?.id) } } : {})}
         {...mute(item)}
         {...(item.state !== 'working'
           ? { action: { label: `dismiss ${item.label}`, title: 'Dismiss — it returns only if it changes', run: () => dismiss([item], project?.id) } }
