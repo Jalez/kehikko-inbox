@@ -276,7 +276,7 @@ export function topOf(read: Pick<InboxReadResult, 'items' | 'elsewhere' | 'next'
 /** A container this short or shorter, in CSS pixels, shows only the count and the top item. */
 export const SMALL_BELOW = 96
 
-/* ---- adopting an item no epic names (protocol 2.88.0) ---- */
+/* ---- adopting an item no space names (protocol 2.88.0, 2.91.0) ---- */
 
 /** One press an adoptable item offers. */
 export type AdoptPress =
@@ -290,6 +290,10 @@ export interface AdoptOffer {
   primary: AdoptPress
   /** The other way, when there is one. */
   secondary: AdoptPress | null
+  /** A third, quieter way: the picker, beside a sure suggestion and the agent. */
+  third?: AdoptPress | null
+  /** Why the agent cannot help yet, in a line under the presses, when that is known. */
+  hint?: string | null
 }
 
 /** How many adoptable items the page asks the host about at once, so a sure suggestion is one press. */
@@ -299,19 +303,40 @@ export const UNTRACK_WORDS = "Don't track this"
 export const UNDO_WORDS = 'Undo'
 
 /**
- * What an adoptable item offers:
- * - an unambiguous suggestion: "Add to <epic>" in one press, and "Adopt with <agent>…" or "Another epic…";
- * - otherwise, with the person's agent for Kehikot's own tasks: "Adopt with <agent>…", and "Choose an epic…";
- * - otherwise: "Add to an epic…", the picker.
- * Before the host has said (`adoption` null): the picker alone. Never adopts by itself.
+ * What an adoptable item offers (protocol 2.88.0, 2.91.0). The agent of the person's kehikko is the way
+ * by default, and where it cannot help yet the press is the fix — never only the picker:
+ * - the kehikko's agent (its primary, or its only one): "Adopt with <agent>…";
+ * - several there and none primary: "Adopt with an agent…" (the host asks which, and it becomes primary);
+ * - an agent module there that needs updating first: "Update <name>…";
+ * - no agent module there: "Add an agent module…", with a line saying why.
+ * Each is `inbox.adoptWith`; the host takes the person where it leads. The picker ("Choose a space
+ * myself…") stays a secondary way. An unambiguous suggestion is still "Add to <space>" in one press,
+ * with the agent beside it. Before the host has said (`adoption` null), or from a host that says
+ * nothing of agents: the picker. Never adopts by itself.
  */
-export function adoptOffer(adoption: Pick<InboxAdoptionResult, 'suggested' | 'agent' | 'epics'> | null): AdoptOffer {
-  const pick: AdoptPress = { kind: 'pick', label: 'Add to an epic…' }
-  if (!adoption) return { primary: pick, secondary: null }
+export function adoptOffer(
+  adoption: Pick<InboxAdoptionResult, 'suggested' | 'agent' | 'epics'> & Partial<Pick<InboxAdoptionResult, 'taskAgents' | 'agentsToUpdate'>> | null,
+): AdoptOffer {
+  if (!adoption) return { primary: { kind: 'pick', label: 'Choose a space…' }, secondary: null }
+  let fix: AdoptPress | null = null
+  let hint: string | null = null
+  if (adoption.agent) fix = { kind: 'with', label: `Adopt with ${adoption.agent.name}…` }
+  else if ((adoption.taskAgents?.length ?? 0) > 1) fix = { kind: 'with', label: 'Adopt with an agent…' }
+  else if (adoption.agentsToUpdate?.length) {
+    const name = adoption.agentsToUpdate[0]!.name
+    fix = { kind: 'with', label: `Update ${name}…` }
+    hint = `Update ${name} to let it find the right space.`
+  } else if (adoption.taskAgents) {
+    fix = { kind: 'with', label: 'Add an agent module…' }
+    hint = 'Add an agent module to let it find the right space.'
+  }
   const sure = adoption.suggested?.sure ? adoption.suggested : null
   const title = sure ? (adoption.epics.find((one) => one.epic === sure.epic)?.title ?? sure.epic) : null
-  const withAgent: AdoptPress | null = adoption.agent ? { kind: 'with', label: `Adopt with ${adoption.agent.name}…` } : null
-  if (sure && title) return { primary: { kind: 'add', label: `Add to ${title}`, epic: sure.epic, parts: [...sure.parts] }, secondary: withAgent ?? { kind: 'pick', label: 'Another epic…' } }
-  if (withAgent) return { primary: withAgent, secondary: { kind: 'pick', label: 'Choose an epic…' } }
-  return { primary: pick, secondary: null }
+  const myself: AdoptPress = { kind: 'pick', label: 'Choose a space myself…' }
+  if (sure && title) {
+    const add: AdoptPress = { kind: 'add', label: `Add to ${title}`, epic: sure.epic, parts: [...sure.parts] }
+    return fix ? { primary: add, secondary: fix, third: myself, hint } : { primary: add, secondary: { kind: 'pick', label: 'Another space…' } }
+  }
+  if (fix) return { primary: fix, secondary: myself, hint }
+  return { primary: { kind: 'pick', label: 'Choose a space…' }, secondary: null }
 }
