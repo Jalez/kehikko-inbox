@@ -7,6 +7,14 @@ import {
   inboxLogRowSchema,
   inboxOpenResult,
   inboxUseResult,
+  inboxAdoptionResult,
+  inboxAdoptResult,
+  inboxAdoptWithResult,
+  inboxUntrackResult,
+  inboxUndoResult,
+  type InboxAdoptionResult,
+  type InboxAdoptResult,
+  type InboxAdoptWithResult,
   type InboxActResult,
   type InboxAnswerResult,
   type InboxItem,
@@ -58,6 +66,16 @@ export interface InboxApi {
   answer(key: InboxKey, said: { choice: string } | { answer: string }, project?: number): Promise<InboxAnswerResult>
   open(key: InboxKey, project?: number): Promise<InboxOpenResult>
   use(module: string, use: boolean): Promise<InboxUseResult>
+  /** 2.88.0. What to offer for adopting an item no epic names: a read, no press needed. */
+  adoption(key: InboxKey, project?: number): Promise<InboxAdoptionResult>
+  /** 2.88.0. The person's press: add the item's ref to an epic (and parts). */
+  adopt(key: InboxKey, epic: string, parts: readonly string[], project?: number): Promise<InboxAdoptResult>
+  /** 2.88.0. The person's press: open Kehikot's dialog with their agent for its own tasks. */
+  adoptWith(key: InboxKey, project?: number): Promise<InboxAdoptWithResult>
+  /** 2.88.0. The person's press: tell nothing more about this item here. */
+  untrack(key: InboxKey, project?: number): Promise<InboxActResult>
+  /** 2.88.0. The person's press: take back the last adopt or untrack of an item. */
+  undo(key: InboxKey, project?: number): Promise<InboxActResult>
 }
 
 /** One line for something this Inbox could not read and left out: what it was, and the field. */
@@ -163,6 +181,11 @@ export function inboxApi(request: Request, skip: Skip = defaultSkip): InboxApi {
     answer: (key, said, project) => ask('inbox.answer', withProject({ module: key.module, id: key.id, ...said }, project), inboxAnswerResult),
     open: (key, project) => ask('inbox.open', withProject({ module: key.module, id: key.id }, project), inboxOpenResult),
     use: (module, use) => ask('inbox.use', { module, use }, inboxUseResult),
+    adoption: (key, project) => ask('inbox.adoption', withProject({ module: key.module, id: key.id }, project), inboxAdoptionResult),
+    adopt: (key, epic, parts, project) => ask('inbox.adopt', withProject({ module: key.module, id: key.id, epic, parts: [...parts] }, project), inboxAdoptResult),
+    adoptWith: (key, project) => ask('inbox.adoptWith', withProject({ module: key.module, id: key.id }, project), inboxAdoptWithResult),
+    untrack: (key, project) => ask('inbox.untrack', withProject({ module: key.module, id: key.id }, project), inboxUntrackResult),
+    undo: (key, project) => ask('inbox.undo', withProject({ module: key.module, id: key.id }, project), inboxUndoResult),
   }
 }
 

@@ -1,10 +1,11 @@
 import { BellOff, ChevronDown, ChevronRight, X } from 'lucide-react'
 import { useState } from 'react'
 
-import { LIMITS, type InboxItem } from 'kehikot-module-protocol'
+import { LIMITS, type InboxAdoptionResult, type InboxItem } from 'kehikot-module-protocol'
 import { Badge, Button, Textarea, cn } from 'kehikot-module-protocol/client/ui'
 
-import { STATE_WORDS } from '../inbox.ts'
+import { STATE_WORDS, UNDO_WORDS, UNTRACK_WORDS, adoptOffer, type AdoptPress } from '../inbox.ts'
+import { NativeSelect, NativeSelectOption } from './ui/native-select'
 
 /**
  * The pieces of the Inbox's list. Every string here is the host's or a module's TEXT: drawn as
@@ -263,6 +264,118 @@ export function Question({ question, onAnswer }: { question: NonNullable<InboxIt
           ) : null}
         </>
       )}
+    </div>
+  )
+}
+
+/**
+ * What an item about a change no epic names offers (protocol 2.88.0): "Add to <epic>" in one press when
+ * the host's suggestion is unambiguous, "Adopt with <agent>…" when the person picked an agent for
+ * Kehikot's own tasks, the epic and part picker otherwise, and "Don't track this". Every press is the
+ * person's; nothing here adopts by itself. `after`: what the last act did, with Undo.
+ */
+export function AdoptBar({
+  item,
+  adoption,
+  onRead,
+  onAdopt,
+  onWith,
+  onUntrack,
+  onUndo,
+}: {
+  item: Pick<InboxItem, 'adoptable' | 'after' | 'label'>
+  adoption: InboxAdoptionResult | null
+  /** Read what to offer (the picker needs the epics); a read, no press. */
+  onRead(): void
+  onAdopt(epic: string, parts: readonly string[]): void
+  onWith(): void
+  onUntrack(): void
+  onUndo(): void
+}) {
+  const [picking, setPicking] = useState(false)
+  const [epic, setEpic] = useState('')
+  const [parts, setParts] = useState<string[]>([])
+  const offer = adoptOffer(adoption)
+  const chosen = adoption?.epics.find((one) => one.epic === (epic || adoption.suggested?.epic || adoption.epics[0]?.epic)) ?? null
+  const press = (one: AdoptPress) => {
+    if (one.kind === 'add') onAdopt(one.epic, one.parts)
+    else if (one.kind === 'with') onWith()
+    else {
+      if (!adoption) onRead()
+      setPicking(true)
+    }
+  }
+  return (
+    <div className="flex w-full flex-col gap-1 pl-3" data-adopt="">
+      {item.after?.said ? (
+        <div className="text-muted-foreground flex items-center gap-1.5 text-[11px]" data-after="">
+          <span className="min-w-0 truncate">{item.after.said}</span>
+          {item.after.undo ? (
+            <Button variant="link" size="sm" className="h-auto p-0 text-[11px]" onClick={onUndo} data-undo="">
+              {UNDO_WORDS}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {item.adoptable ? (
+        <div className="flex flex-wrap items-center gap-1">
+          <Button size="sm" variant="secondary" className="h-6 px-2 text-[11px]" onClick={() => press(offer.primary)} data-adopt-press={offer.primary.kind}>
+            {offer.primary.label}
+          </Button>
+          {offer.secondary ? (
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => press(offer.secondary!)} data-adopt-press={`${offer.secondary.kind}-2`}>
+              {offer.secondary.label}
+            </Button>
+          ) : null}
+          <Button size="sm" variant="ghost" className="text-muted-foreground h-6 px-2 text-[11px]" onClick={onUntrack} data-untrack="">
+            {UNTRACK_WORDS}
+          </Button>
+        </div>
+      ) : null}
+      {item.adoptable && picking ? (
+        adoption ? (
+          adoption.epics.length ? (
+            <div className="bg-muted/40 flex flex-col gap-1.5 rounded-md border p-2" data-adopt-picker="">
+              <NativeSelect aria-label="Epic" value={chosen?.epic ?? ''} onChange={(event) => (setEpic(event.target.value), setParts([]))}>
+                {adoption.epics.map((one) => (
+                  <NativeSelectOption key={one.epic} value={one.epic}>
+                    {one.title}
+                    {adoption.suggested?.epic === one.epic ? ' (suggested)' : ''}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              {chosen?.parts.length ? (
+                <fieldset className="flex flex-wrap gap-x-3 gap-y-1">
+                  <legend className="sr-only">Parts</legend>
+                  {chosen.parts.map((part) => (
+                    <label key={part.id} className="flex items-center gap-1 text-[11px]">
+                      <input
+                        type="checkbox"
+                        className="accent-primary size-3"
+                        checked={parts.includes(part.id)}
+                        onChange={(event) => setParts((was) => (event.target.checked ? [...was, part.id] : was.filter((one) => one !== part.id)))}
+                      />
+                      {part.name}
+                    </label>
+                  ))}
+                </fieldset>
+              ) : null}
+              <div className="flex gap-1">
+                <Button size="sm" className="h-6 px-2 text-[11px]" disabled={!chosen} onClick={() => chosen && onAdopt(chosen.epic, parts)} data-adopt-confirm="">
+                  {chosen ? `Add to ${chosen.title}` : 'Add'}
+                </Button>
+                <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setPicking(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-[11px]">This project has no epics yet.</p>
+          )
+        ) : (
+          <p className="text-muted-foreground text-[11px]">Reading the epics…</p>
+        )
+      ) : null}
     </div>
   )
 }
