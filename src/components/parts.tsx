@@ -301,7 +301,7 @@ export function AdoptBar({
     if (one.kind === 'add') onAdopt(one.epic, one.parts)
     else if (one.kind === 'with') onWith()
     else {
-      if (!adoption) onRead()
+      onRead()
       setPicking(true)
     }
   }
@@ -327,16 +327,26 @@ export function AdoptBar({
               {offer.secondary.label}
             </Button>
           ) : null}
+          {offer.third ? (
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => press(offer.third!)} data-adopt-press={`${offer.third.kind}-3`}>
+              {offer.third.label}
+            </Button>
+          ) : null}
           <Button size="sm" variant="ghost" className="text-muted-foreground h-6 px-2 text-[11px]" onClick={onUntrack} data-untrack="">
             {UNTRACK_WORDS}
           </Button>
         </div>
       ) : null}
+      {item.adoptable && offer.hint ? (
+        <p className="text-muted-foreground text-[11px]" data-adopt-hint="">
+          {offer.hint}
+        </p>
+      ) : null}
       {item.adoptable && picking ? (
         adoption ? (
           adoption.epics.length ? (
             <div className="bg-muted/40 flex flex-col gap-1.5 rounded-md border p-2" data-adopt-picker="">
-              <NativeSelect aria-label="Epic" value={chosen?.epic ?? ''} onChange={(event) => (setEpic(event.target.value), setParts([]))}>
+              <NativeSelect aria-label="Space" value={chosen?.epic ?? ''} onChange={(event) => (setEpic(event.target.value), setParts([]))}>
                 {adoption.epics.map((one) => (
                   <NativeSelectOption key={one.epic} value={one.epic}>
                     {one.title}
@@ -346,7 +356,7 @@ export function AdoptBar({
               </NativeSelect>
               {chosen?.parts.length ? (
                 <fieldset className="flex flex-wrap gap-x-3 gap-y-1">
-                  <legend className="sr-only">Parts</legend>
+                  <legend className="sr-only">Spaces in it</legend>
                   {chosen.parts.map((part) => (
                     <label key={part.id} className="flex items-center gap-1 text-[11px]">
                       <input

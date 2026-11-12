@@ -34,17 +34,37 @@ const adoption = (over: Partial<InboxAdoptionResult> = {}): InboxAdoptionResult 
 })
 
 describe('what an adoptable item offers', () => {
-  test('an unambiguous suggestion is one press; the agent or another epic beside it', () => {
-    const sure = { epic: 'auth', parts: [], why: 'w', sure: true }
-    expect(adoptOffer(adoption({ suggested: sure }))).toEqual({ primary: { kind: 'add', label: 'Add to Auth', epic: 'auth', parts: [] }, secondary: { kind: 'pick', label: 'Another epic…' } })
-    expect(adoptOffer(adoption({ suggested: sure, agent: { module: 'm', name: 'Claude' } })).secondary).toEqual({ kind: 'with', label: 'Adopt with Claude…' })
-  })
-  test('no sure suggestion: the agent first when picked, else the picker', () => {
-    expect(adoptOffer(adoption({ suggested: { epic: 'auth', parts: [], why: 'w', sure: false }, agent: { module: 'm', name: 'Claude' } }))).toEqual({
-      primary: { kind: 'with', label: 'Adopt with Claude…' },
-      secondary: { kind: 'pick', label: 'Choose an epic…' },
+  const sure = { epic: 'auth', parts: [], why: 'w', sure: true }
+  const claude = { module: 'm', name: 'Claude' }
+  test('an unambiguous suggestion is one press, with the agent beside it and the picker after', () => {
+    expect(adoptOffer(adoption({ suggested: sure }))).toEqual({ primary: { kind: 'add', label: 'Add to Auth', epic: 'auth', parts: [] }, secondary: { kind: 'pick', label: 'Another space…' } })
+    expect(adoptOffer(adoption({ suggested: sure, agent: claude }))).toEqual({
+      primary: { kind: 'add', label: 'Add to Auth', epic: 'auth', parts: [] },
+      secondary: { kind: 'with', label: 'Adopt with Claude…' },
+      third: { kind: 'pick', label: 'Choose a space myself…' },
+      hint: null,
     })
-    expect(adoptOffer(adoption())).toEqual({ primary: { kind: 'pick', label: 'Add to an epic…' }, secondary: null })
+  })
+  test('the kehikko’s agent is the main press; the picker is the other way', () => {
+    expect(adoptOffer(adoption({ suggested: { ...sure, sure: false }, agent: claude }))).toEqual({
+      primary: { kind: 'with', label: 'Adopt with Claude…' },
+      secondary: { kind: 'pick', label: 'Choose a space myself…' },
+      hint: null,
+    })
+  })
+  test('never only the picker: choose an agent, update one, or add one', () => {
+    const two = adoptOffer(adoption({ taskAgents: [{ module: 'a', name: 'A' }, { module: 'b', name: 'B' }] }))
+    expect(two.primary).toEqual({ kind: 'with', label: 'Adopt with an agent…' })
+    const old = adoptOffer(adoption({ taskAgents: [], agentsToUpdate: [{ module: 'kehikot.claude', name: 'Claude' }] }))
+    expect(old.primary).toEqual({ kind: 'with', label: 'Update Claude…' })
+    expect(old.hint).toBe('Update Claude to let it find the right space.')
+    const none = adoptOffer(adoption({ taskAgents: [] }))
+    expect(none.primary).toEqual({ kind: 'with', label: 'Add an agent module…' })
+    expect(none.secondary).toEqual({ kind: 'pick', label: 'Choose a space myself…' })
+    expect(none.hint).toBe('Add an agent module to let it find the right space.')
+  })
+  test('before the host said, or from a host that says nothing of agents: the picker', () => {
+    expect(adoptOffer(adoption())).toEqual({ primary: { kind: 'pick', label: 'Choose a space…' }, secondary: null })
     expect(adoptOffer(null).primary.kind).toBe('pick')
   })
 })
@@ -91,7 +111,7 @@ describe('the row', () => {
       'inbox.adoption': () => adoption(),
       'inbox.adopt': () => ({ outcome: 'adopted', said: 'Added to Auth', brought: [], why: '' }),
     })
-    fireEvent.click(await screen.findByRole('button', { name: 'Add to an epic…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose a space…' }))
     fireEvent.click(await screen.findByLabelText('Login'))
     fireEvent.click(screen.getByRole('button', { name: 'Add to Auth' }))
     await waitFor(() => expect(asked.find((one) => one.method === 'inbox.adopt')?.params).toEqual({ ...key, epic: 'auth', parts: ['login'] }))
@@ -103,6 +123,32 @@ describe('the row', () => {
       'inbox.adoptWith': () => ({ outcome: 'opened', why: '' }),
     })
     fireEvent.click(await screen.findByRole('button', { name: 'Adopt with Claude…' }))
+    await waitFor(() => expect(asked.find((one) => one.method === 'inbox.adoptWith')?.params).toEqual(key))
+  })
+
+  test('an offer is read again: an agent set up after the first read becomes the main press (the bug)', async () => {
+    let agent: { module: string; name: string } | null = null
+    const asked = show(readOf({ items: [notice] }), {
+      'inbox.adoption': () => adoption({ agent, ...(agent ? {} : { taskAgents: [] }) }),
+      'inbox.adoptWith': () => ({ outcome: 'opened', why: '' }),
+    })
+    /* No agent yet: the fix is offered, and the picker beside it. */
+    fireEvent.click(await screen.findByRole('button', { name: 'Add an agent module…' }))
+    await waitFor(() => expect(asked.filter((one) => one.method === 'inbox.adoptWith')).toHaveLength(1))
+    /* The person added one: the offer read again after the press shows it, no reload. */
+    agent = { module: 'kehikot.claude', name: 'Claude' }
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose a space myself…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Adopt with Claude…' }))
+    await waitFor(() => expect(asked.filter((one) => one.method === 'inbox.adoptWith')).toHaveLength(2))
+  })
+
+  test('"Update <agent>…" asks the host, which takes the person to the update', async () => {
+    const asked = show(readOf({ items: [notice] }), {
+      'inbox.adoption': () => adoption({ taskAgents: [], agentsToUpdate: [{ module: 'kehikot.claude', name: 'Claude' }] }),
+      'inbox.adoptWith': () => ({ outcome: 'opened', why: '' }),
+    })
+    expect(await screen.findByText('Update Claude to let it find the right space.')).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: 'Update Claude…' }))
     await waitFor(() => expect(asked.find((one) => one.method === 'inbox.adoptWith')?.params).toEqual(key))
   })
 

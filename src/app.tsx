@@ -387,7 +387,7 @@ function List({
 }) {
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set())
   const [mutedOpen, setMutedOpen] = useState(false)
-  /* Adopting an item no epic names (protocol 2.88.0): what the host offers for each, read once per record. */
+  /* Adopting an item no space names (protocol 2.88.0): what the host offers for each, read again as things change. */
   const [adoptions, setAdoptions] = useState<ReadonlyMap<string, InboxAdoptionResult>>(new Map())
   const [untracked, setUntracked] = useState<{ key: InboxKey; project?: number; label: string } | null>(null)
   const readAdoption = useCallback(
@@ -400,10 +400,6 @@ function List({
     },
     [api],
   )
-  useEffect(() => {
-    /* The first few, so an unambiguous suggestion is one press; the rest when their picker opens. */
-    for (const item of read.items.filter((one) => one.adoptable).slice(0, ADOPT_READ_FIRST)) if (!adoptions.has(keyOf(item))) readAdoption(item)
-  }, [read.rev])
   /* Ages tick. */
   const [now, setNow] = useState(clock)
   useEffect(() => {
@@ -411,7 +407,16 @@ function List({
     const timer = setInterval(() => setNow(clock()), 30_000)
     return () => clearInterval(timer)
   }, [clock, read])
-
+  /*
+   * The first few, so an unambiguous suggestion is one press; the rest when their picker opens. Read
+   * AGAIN on every change of the record and every tick, never kept for good: which agent can help
+   * (the kehikko's primary, a module installed or updated) changes without the item changing, and an
+   * offer read once stayed the picker after the person had set an agent up.
+   */
+  useEffect(() => {
+    const first = read.items.filter((one) => one.adoptable).slice(0, ADOPT_READ_FIRST)
+    for (const item of first) readAdoption(item)
+  }, [read.rev, now])
   const dismiss = (items: readonly InboxItem[], project?: number) =>
     void after(api.act({ do: 'dismiss', keys: items.map(({ module, id }) => ({ module, id })), ...(project === undefined ? {} : { project }) }), 'done')
   const mute = (item: InboxItem) =>
@@ -453,7 +458,11 @@ function List({
             onAdopt={(epic, parts) => void after(api.adopt({ module: item.module, id: item.id }, epic, parts, project?.id), 'adopted')}
             onWith={() =>
               void api.adoptWith({ module: item.module, id: item.id }, project?.id).then(
-                (got) => setSaid(got.outcome === 'opened' ? null : got.why || 'Kehikot did not open it.'),
+                (got) => {
+                  setSaid(got.outcome === 'opened' ? null : got.why || 'Kehikot did not open it.')
+                  /* What it led to (an agent chosen, a module added or updated) changes what is offered. */
+                  readAdoption(item, project?.id)
+                },
                 (error: unknown) => setSaid(sentence(error)),
               )
             }
