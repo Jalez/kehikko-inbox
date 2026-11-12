@@ -80,8 +80,8 @@ export function Row({ rowKey, dot, by, state, label, detail, place, age, urgent,
         <span className="flex shrink-0">{dot}</span>
         <span className="text-muted-foreground min-w-0 truncate" data-byline="">
           <span className="text-foreground/80">{by}</span>
-          <span aria-hidden> · </span>
-          <span className="sr-only">, </span>
+          {/* One separator, seen and read alike: a hidden " · " beside a read-only ", " copied as "Tracker · , needs you". */}
+          <span> · </span>
           {state}
         </span>
         {urgent ? <Urgent /> : null}

@@ -73,7 +73,7 @@ describe('the list', () => {
     expect(needs.textContent).toContain('Which branch?')
     expect(needs.textContent).toContain('part 1 · Wide · Auth')
     expect(needs.textContent).toContain('1 min ago')
-    expect(screen.getByRole('region', { name: 'working' }).querySelector('[data-byline]')?.textContent).toBe('Queue · , working')
+    expect(screen.getByRole('region', { name: 'working' }).querySelector('[data-byline]')?.textContent).toBe('Queue · working')
     expect(asked[0]?.method).toBe('inbox.read')
     await waitFor(() => expect(ready).toHaveBeenCalled())
   })
