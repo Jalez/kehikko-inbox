@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { HostRefused } from 'kehikot-module-protocol/client'
 import type { InboxAdoptionResult, InboxReadResult } from 'kehikot-module-protocol'
 
-import { Screen } from '../src/app.tsx'
+import { Screen, type Signal } from '../src/app.tsx'
 import { DEFAULT_FILTER, adoptOffer } from '../src/inbox.ts'
 import { inboxApi } from '../src/wire/inbox-api.ts'
 import type { Host } from '../src/wire/use-kehikot.ts'
@@ -167,5 +167,54 @@ describe('the row', () => {
     await waitFor(() => expect(asked.filter((one) => one.method === 'inbox.undo').map((one) => one.params)).toEqual([key]))
     fireEvent.click(document.querySelector('[data-undo]')!)
     await waitFor(() => expect(asked.filter((one) => one.method === 'inbox.undo').map((one) => one.params)).toEqual([key, { module: 'kehikko.trackers', id: 'x' }]))
+  })
+})
+
+describe('offers are asked when something changed, never polled (Jalez/kehikko#384)', () => {
+  test('a reread of the same record and the passing clock ask nothing; the host saying something changed asks again', async () => {
+    const read = readOf({ items: [notice] })
+    const asked: { method: string; params: Record<string, unknown> }[] = []
+    const answers: Record<string, (params: Record<string, unknown>) => unknown> = {
+      'inbox.read': () => ({ ...read }),
+      'inbox.log': () => ({ rows: [], more: false, total: 0 }),
+      'inbox.adoption': () => adoption(),
+      'inbox.act': () => ({ outcome: 'done', changed: 0, why: '' }),
+    }
+    const host: Host = {
+      where: 'hosted',
+      projectPath: '/work/kehikot',
+      answers: null,
+      drawsFooter: true,
+      visible: true,
+      request: async (method, params = {}) => {
+        asked.push({ method, params })
+        const answer = answers[method]
+        if (!answer) throw new HostRefused({ reason: 'unknown-method', error: `no ${method}` })
+        return answer(params)
+      },
+      header: () => {},
+      footer: () => {},
+      ready: mock(() => {}),
+    }
+    const api = inboxApi(host.request)
+    /* A clock that moves: the ages tick on it, and must ask the host nothing. */
+    const clock = () => Date.now()
+    const screenOf = (signal: Signal | null) => <Screen host={host} api={api} filter={DEFAULT_FILTER} signal={signal} box={{ height: 600 }} now={clock} />
+    const view = render(screenOf(null))
+    const offers = () => asked.filter((one) => one.method === 'inbox.adoption').length
+    const reads = () => asked.filter((one) => one.method === 'inbox.read').length
+    await waitFor(() => expect(offers()).toBe(1))
+
+    /* An act reads the record again; the same record asks no offer. */
+    fireEvent.click(await screen.findByRole('button', { name: `dismiss ${notice.label}` }))
+    await waitFor(() => expect(reads()).toBe(2))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(offers()).toBe(1)
+
+    /* The host says something changed (an agent module installed, the kehikko's primary agent): asked again. */
+    view.rerender(screenOf({ kind: 'changed', next: null, n: 1 }))
+    await waitFor(() => expect(offers()).toBe(2))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(offers()).toBe(2)
   })
 })
