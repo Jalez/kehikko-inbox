@@ -118,6 +118,13 @@ export function Screen({
   const [said, setSaid] = useState<string | null>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
   const hosted = host.where === 'hosted'
+  /*
+   * When what an item offers to adopt is asked again besides a new record (`List`): the host said
+   * something changed, or the page was shown again. Never on a timer and never on a reread whose
+   * record is the same: each ask is a call the host answers (Jalez/kehikko#384).
+   */
+  const [offersAt, setOffersAt] = useState(0)
+  const askOffersAgain = useCallback(() => setOffersAt((n) => n + 1), [])
 
   const reread = useCallback(() => {
     api.read().then(
@@ -141,17 +148,22 @@ export function Screen({
   const visible = host.visible ?? true
   const wasVisible = useRef(visible)
   useEffect(() => {
-    if (visible && !wasVisible.current && hosted) reread()
+    if (visible && !wasVisible.current && hosted) {
+      reread()
+      askOffersAgain()
+    }
     wasVisible.current = visible
-  }, [visible, hosted, reread])
+  }, [visible, hosted, reread, askOffersAgain])
   useEffect(() => {
     if (!hosted) return
     const shown = () => {
-      if (document.visibilityState === 'visible') reread()
+      if (document.visibilityState !== 'visible') return
+      reread()
+      askOffersAgain()
     }
     document.addEventListener('visibilitychange', shown)
     return () => document.removeEventListener('visibilitychange', shown)
-  }, [hosted, reread])
+  }, [hosted, reread, askOffersAgain])
 
   /** Say what an act came to when it was not taken, and read the record again. */
   const after: After = useCallback(
@@ -204,9 +216,11 @@ export function Screen({
   useEffect(() => {
     if (!signal || handled.current === signal.n) return
     handled.current = signal.n
-    if (signal.kind === 'changed') reread()
-    else goNext(signal.next)
-  }, [signal, reread, goNext])
+    if (signal.kind === 'changed') {
+      reread()
+      askOffersAgain()
+    } else goNext(signal.next)
+  }, [signal, reread, goNext, askOffersAgain])
 
   /* The highlighted row is scrolled to, and the highlight goes after a moment. */
   useEffect(() => {
@@ -267,7 +281,7 @@ export function Screen({
               </p>
             ) : null}
             {read && arranged ? (
-              <List read={read} arranged={arranged} filter={filter} onFilter={onFilter} api={api} now={now} highlight={highlight} onOpen={open} after={after} setSaid={setSaid} />
+              <List read={read} arranged={arranged} filter={filter} onFilter={onFilter} api={api} now={now} offersAt={offersAt} highlight={highlight} onOpen={open} after={after} setSaid={setSaid} />
             ) : null}
           </main>
           {!drawsFooter && tally ? (
@@ -369,6 +383,7 @@ function List({
   onFilter,
   api,
   now: clock,
+  offersAt,
   highlight,
   onOpen,
   after,
@@ -380,6 +395,8 @@ function List({
   onFilter(filter: Filter): void
   api: InboxApi
   now: () => number
+  /** Bumped when the host said something changed or the page was shown again: offers are asked again. */
+  offersAt: number
   highlight: string | null
   onOpen(key: InboxKey, project?: number): void
   after: After
@@ -406,17 +423,24 @@ function List({
     setNow(clock())
     const timer = setInterval(() => setNow(clock()), 30_000)
     return () => clearInterval(timer)
-  }, [clock, read])
+  }, [clock])
   /*
-   * The first few, so an unambiguous suggestion is one press; the rest when their picker opens. Read
-   * AGAIN on every change of the record and every tick, never kept for good: which agent can help
-   * (the kehikko's primary, a module installed or updated) changes without the item changing, and an
-   * offer read once stayed the picker after the person had set an agent up.
+   * The first few, so an unambiguous suggestion is one press; the rest when their picker opens. Asked
+   * again when the record changes and when the host says something changed (`offersAt`: which agent
+   * can help — the kehikko's primary, a module installed or updated — changes without the item
+   * changing, and the host tells the Inbox then), and on the person's press. Never on the clock or a
+   * reread of the same record: that was a call to the host every few seconds with the same answer
+   * (Jalez/kehikko#384). The ages above tick on their own and ask nothing.
    */
+  const firstAdoptable = read.items
+    .filter((one) => one.adoptable)
+    .slice(0, ADOPT_READ_FIRST)
+    .map((one) => keyOf(one))
+    .join('\u0000')
   useEffect(() => {
     const first = read.items.filter((one) => one.adoptable).slice(0, ADOPT_READ_FIRST)
     for (const item of first) readAdoption(item)
-  }, [read.rev, now])
+  }, [read.rev, offersAt, firstAdoptable])
   const dismiss = (items: readonly InboxItem[], project?: number) =>
     void after(api.act({ do: 'dismiss', keys: items.map(({ module, id }) => ({ module, id })), ...(project === undefined ? {} : { project }) }), 'done')
   const mute = (item: InboxItem) =>
